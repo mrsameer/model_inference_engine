@@ -2,9 +2,19 @@ version: "3.9"
 
 services:
   inference-api:
+    container_name: model-inference-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: model-inference-engine:latest
+    ports:
+      - "5000:5000"
     environment:
+      UVICORN_WORKERS: "1"
       NVIDIA_VISIBLE_DEVICES: "all"
       NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
+    volumes:
+      - models-cache:/models
     deploy:
       resources:
         reservations:
@@ -12,3 +22,9 @@ services:
             - driver: nvidia
               count: all
               capabilities: ["gpu"]
+    runtime: nvidia
+    restart: unless-stopped
+
+volumes:
+  models-cache:
+    driver: local

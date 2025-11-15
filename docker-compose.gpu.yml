@@ -6,7 +6,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: model-inference-engine:latest
+    image: model-inference-engine-gpu:latest
     ports:
       - "5001:5000"
     environment:

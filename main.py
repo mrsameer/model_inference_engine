@@ -270,6 +270,25 @@ def register_default_models():
         ),
     )
 
+    # Fall Army Worm Detection Model
+    pest_faw = ModelCard(
+        id="pest_fall_army_warm_ss",
+        name="Fall Army Worm Detector (YOLOv8s)",
+        description="Fine-tuned YOLOv8 small model for detecting fall army worms on crop leaves. Optimized for agricultural pest detection with 40% mAP50 on validation data.",
+        task=ModelTask.object_detection,
+        framework="ultralytics",
+        tags=["pest-detection", "yolo", "fall-army-worm", "agriculture", "crop-monitoring"],
+        capabilities=["object-detection", "bounding-box", "pest-detection"],
+    )
+    registry.register(
+        pest_faw,
+        lambda card=pest_faw: YoloRunner(
+            card=card,
+            weights="models/pest_fall_army_warm_ss.pt",
+            conf_threshold=0.25,
+        ),
+    )
+
 
 register_default_models()
 

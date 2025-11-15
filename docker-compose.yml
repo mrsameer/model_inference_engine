@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  inference-api:
+    container_name: model-inference-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: model-inference-engine:latest
+    ports:
+      - "5000:5000"
+    environment:
+      UVICORN_WORKERS: "1"
+    volumes:
+      - models-cache:/models
+    restart: unless-stopped
+
+volumes:
+  models-cache:
+    driver: local

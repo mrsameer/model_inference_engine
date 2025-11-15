@@ -1,11 +1,26 @@
 # Test your FastAPI endpoints
 
-GET http://127.0.0.1:8000/
+### list available models
+GET http://127.0.0.1:5000/models
 Accept: application/json
 
-###
-
-GET http://127.0.0.1:8000/hello/User
+### sample YOLO inference via image url
+POST http://127.0.0.1:5000/inference
+Content-Type: application/json
 Accept: application/json
 
-###
+{
+  "model_id": "yolov8n",
+  "image_url": "https://ultralytics.com/images/bus.jpg"
+}
+
+### sample vision-language inference
+POST http://127.0.0.1:5000/inference
+Content-Type: application/json
+Accept: application/json
+
+{
+  "model_id": "blip-vqa-base",
+  "prompt": "Describe the scene",
+  "image_url": "https://ultralytics.com/images/zidane.jpg"
+}

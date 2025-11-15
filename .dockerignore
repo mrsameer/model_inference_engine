@@ -1,0 +1,20 @@
+# Local development artifacts
+.venv
+__pycache__
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dylib
+
+# Tooling
+.git
+.gitignore
+.idea
+.DS_Store
+pytest_cache
+mypy_cache
+.cache
+
+# OS files
+Thumbs.db

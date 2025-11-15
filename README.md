@@ -56,6 +56,7 @@ If the GPU stack crashes with messages such as `CUDA error: device-side assert t
    pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 torch==2.3.1 torchvision==0.18.1 --upgrade --force-reinstall
    ```
    Rebuild the image afterwards so the cached layer includes the GPU enabled wheels.
+   *Compatibility note:* the CUDA runtime baked into the wheel has to be **newer than or equal to** the version exposed by `nvidia-smi`. For example, the default PyTorch wheel we picked up recently (`2.9.1+cu128`) expects CUDA 12.8, but the host driver `535.261.03` only provides CUDA 12.2, so the kernel immediately fails. Either upgrade the host driver to a CUDA 12.8 capable release (550+) or install a wheel built for CUDA 12.1/12.2 (e.g. `--index-url ... cu121` as shown above).
 4. **Use the debugging knobs** – the GPU override compose file exposes `TORCH_USE_CUDA_DSA`, `CUDA_LAUNCH_BLOCKING`, and `PYTORCH_CUDA_ALLOC_CONF`. Export them before running compose to enable extra diagnostics, e.g.:
    ```bash
    export TORCH_USE_CUDA_DSA=1

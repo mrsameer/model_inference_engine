@@ -8,7 +8,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH" \
     HUGGINGFACE_HUB_CACHE=/models/huggingface \
     TRANSFORMERS_CACHE=/models/huggingface \
-    ULTRALYTICS_CACHE_DIR=/models/ultralytics
+    ULTRALYTICS_CACHE_DIR=/models/ultralytics \
+    YOLO_CACHE_DIR=/models/ultralytics \
+    YOLO_CONFIG_DIR=/tmp/ultralytics \
+    ULTRALYTICS_SETTINGS_DIR=/tmp/ultralytics \
+    ULTRALYTICS_CONFIG_DIR=/tmp/ultralytics
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -27,7 +31,8 @@ RUN pip install --no-cache-dir uv \
     && uv sync --frozen --no-dev --python /usr/local/bin/python
 
 COPY . .
-RUN mkdir -p /models/huggingface /models/ultralytics
+RUN mkdir -p /models/huggingface /models/ultralytics /tmp/ultralytics \
+    && chmod -R 777 /tmp/ultralytics
 
 EXPOSE 5000
 

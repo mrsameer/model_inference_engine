@@ -40,6 +40,34 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 ```
 Macs and other hosts without NVIDIA GPUs can simply skip the override file; the stack will run in CPU mode without errors.
 
+### GPU troubleshooting
+If the GPU stack crashes with messages such as `CUDA error: device-side assert triggered` or `compile with TORCH_USE_CUDA_DSA to enable device-side assertions`, follow the checklist below to narrow things down:
+1. **Validate the host driver** – run `nvidia-smi` on the host and make sure the driver is recent enough for CUDA 12.x (535+ for Ampere, 550+ for Ada). GPU containers inherit the host driver – an outdated driver is the most common cause of mysterious CUDA crashes.
+2. **Confirm the container sees the GPU** – `docker compose -f docker-compose.yml -f docker-compose.gpu.yml run --rm inference-api python - <<'PY'` followed by a short snippet prints the CUDA runtime info:
+   ```python
+   import torch
+   print('torch:', torch.__version__)
+   print('cuda:', torch.version.cuda)
+   print('available:', torch.cuda.is_available())
+   print('device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu')
+   ```
+3. **Reinstall matching PyTorch wheels** – if the container reports `Torch not compiled with CUDA` install the CUDA build explicitly (inside the container):
+   ```bash
+   pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 torch==2.3.1 torchvision==0.18.1 --upgrade --force-reinstall
+   ```
+   Rebuild the image afterwards so the cached layer includes the GPU enabled wheels.
+4. **Use the debugging knobs** – the GPU override compose file exposes `TORCH_USE_CUDA_DSA`, `CUDA_LAUNCH_BLOCKING`, and `PYTORCH_CUDA_ALLOC_CONF`. Export them before running compose to enable extra diagnostics, e.g.:
+   ```bash
+   export TORCH_USE_CUDA_DSA=1
+   export CUDA_LAUNCH_BLOCKING=1
+   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+   ```
+
+If the crash persists even after the above, temporarily force CPU execution by unsetting `CUDA_VISIBLE_DEVICES` (or removing the GPU override file) while you continue investigating the GPU runtime.
+
+### Ultralytics config path
+Ultralytics writes a small `settings.yaml` file to `~/.config/Ultralytics` on startup. Containers sometimes run without a writable home directory, which surfaces as `config directory /root/.config/Ultralytics is not writable`. The image now sets `YOLO_CONFIG_DIR`, `ULTRALYTICS_SETTINGS_DIR`, and `ULTRALYTICS_CONFIG_DIR` to `/tmp/ultralytics`, ensuring the library always has a safe scratch directory. If you prefer to persist those settings, override any of the above environment variables in `docker-compose.yml` to point at a writable folder/volume, for example `/models/ultralytics/config`.
+
 ## API reference
 - `GET /healthz` – readiness probe.
 - `GET /models` – list the registered models.

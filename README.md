@@ -28,22 +28,27 @@ curl -X POST http://localhost:5000/inference \
 ```
 
 ## Docker compose deployment
+The default compose file runs the CPU stack on port `5000` and mounts the `models-cache` volume to `/models` so downloaded YOLO weights and Hugging Face checkpoints are persisted between restarts.
 ```bash
 docker compose up --build
 ```
-The compose file exposes port `5000` and mounts the `models-cache` volume to `/models` so downloaded YOLO weights and Hugging Face checkpoints are persisted between restarts.
 
 ### GPU acceleration (optional)
-On machines with the NVIDIA Container Toolkit installed you can layer the GPU override file to request all GPUs automatically:
+On machines with the NVIDIA Container Toolkit installed you can start the GPU stack (port `5001`) side-by-side with the CPU version. GPU-only workflow:
+```bash
+docker compose -f docker-compose.gpu.yml up --build
+```
+
+To run both variants at once (CPU on `5000`, GPU on `5001`) bring up the combined stack:
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 ```
-Macs and other hosts without NVIDIA GPUs can simply skip the override file; the stack will run in CPU mode without errors.
+Macs and other hosts without NVIDIA GPUs can simply skip the GPU file; the CPU stack will continue to run without errors.
 
 ### GPU troubleshooting
 If the GPU stack crashes with messages such as `CUDA error: device-side assert triggered` or `compile with TORCH_USE_CUDA_DSA to enable device-side assertions`, follow the checklist below to narrow things down:
 1. **Validate the host driver** – run `nvidia-smi` on the host and make sure the driver is recent enough for CUDA 12.x (535+ for Ampere, 550+ for Ada). GPU containers inherit the host driver – an outdated driver is the most common cause of mysterious CUDA crashes.
-2. **Confirm the container sees the GPU** – `docker compose -f docker-compose.yml -f docker-compose.gpu.yml run --rm inference-api python - <<'PY'` followed by a short snippet prints the CUDA runtime info:
+2. **Confirm the container sees the GPU** – `docker compose -f docker-compose.gpu.yml run --rm inference-api-gpu python - <<'PY'` followed by a short snippet prints the CUDA runtime info:
    ```python
    import torch
    print('torch:', torch.__version__)
@@ -61,7 +66,7 @@ If the GPU stack crashes with messages such as `CUDA error: device-side assert t
    ```bash
    export TORCH_USE_CUDA_DSA=1
    export CUDA_LAUNCH_BLOCKING=1
-   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+   docker compose -f docker-compose.gpu.yml up --build
    ```
 
 If the crash persists even after the above, temporarily force CPU execution by unsetting `CUDA_VISIBLE_DEVICES` (or removing the GPU override file) while you continue investigating the GPU runtime.

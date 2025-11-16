@@ -487,6 +487,166 @@ class GeminiVLMRunner(BaseModelRunner):
         return {"detections": detections}
 
 
+class ClipVLMRunner(BaseModelRunner):
+    """Runs CLIP VLM for pest detection via external API."""
+
+    API_URL = "https://implicit-jeannetta-attendantly.ngrok-free.dev/analyze"
+    TIMEOUT = 900  # 15 minutes (more than 10 minutes as requested)
+
+    def __init__(self, card: ModelCard):
+        super().__init__(card)
+
+    def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, Any]:  # noqa: ARG002
+        """
+        Run CLIP VLM inference via external API.
+
+        The prompt should be a JSON string containing:
+        - image_url: URL to the image
+        - user_id: User identifier
+        - crop: Crop type
+        """
+        # Parse the prompt to extract context
+        try:
+            context = json.loads(prompt) if prompt else {}
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse prompt as JSON, using empty context")
+            context = {}
+
+        image_url = context.get("image_url")
+        user_id = context.get("user_id", "unknown")
+        crop = context.get("crop", "unknown")
+
+        if not image_url:
+            raise ValueError("image_url is required in prompt for clip_vlm model")
+
+        # Prepare the request payload
+        payload = {
+            "image_url": image_url,
+            "task": "pest",
+            "optional_text": {
+                "user_id": user_id,
+                "crop": crop
+            }
+        }
+
+        logger.info("Calling CLIP VLM API for user=%s, crop=%s", user_id, crop)
+
+        # Make the API call with extended timeout
+        try:
+            with httpx.Client(timeout=self.TIMEOUT) as client:
+                response = client.post(
+                    self.API_URL,
+                    json=payload,
+                    headers={"Content-Type": "application/json"}
+                )
+                response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            logger.error("CLIP VLM API timeout after %d seconds", self.TIMEOUT)
+            raise HTTPException(
+                status_code=504,
+                detail=f"API request timed out after {self.TIMEOUT} seconds"
+            ) from exc
+        except httpx.HTTPError as exc:
+            logger.error("CLIP VLM API error: %s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail=f"External API error: {str(exc)}"
+            ) from exc
+
+        # Parse the response
+        try:
+            result = response.json()
+        except Exception as exc:
+            logger.error("Failed to parse CLIP VLM API response: %s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail="Failed to parse API response"
+            ) from exc
+
+        # Check response status
+        if result.get("status") != "success":
+            error_msg = result.get("message", "Unknown error")
+            logger.error("CLIP VLM API returned error: %s", error_msg)
+            raise HTTPException(
+                status_code=502,
+                detail=f"API error: {error_msg}"
+            )
+
+        # Extract detections from the response
+        detections: List[Detection] = []
+        results_data = result.get("results", {})
+
+        # Process pest_analysis
+        pest_analysis = results_data.get("pest_analysis", {})
+        if pest_analysis:
+            pest_name = pest_analysis.get("pest", "Unknown")
+            bboxes = pest_analysis.get("bbox", [])
+
+            # Each bbox is [x_min, y_min, x_max, y_max]
+            for bbox in bboxes:
+                if len(bbox) == 4:
+                    detections.append(
+                        Detection(
+                            label=pest_name,
+                            confidence=0.9,  # Default confidence
+                            box=BoundingBox(
+                                x_min=float(bbox[0]),
+                                y_min=float(bbox[1]),
+                                x_max=float(bbox[2]),
+                                y_max=float(bbox[3]),
+                            ),
+                        )
+                    )
+
+        # Also process pest_symptom_analysis if needed
+        pest_symptom = results_data.get("pest_symptom_analysis", {})
+        if pest_symptom and not pest_analysis:  # Only if pest_analysis didn't provide results
+            pest_name = pest_symptom.get("pest", "Unknown")
+            bboxes = pest_symptom.get("bbox", [])
+
+            for bbox in bboxes:
+                if len(bbox) == 4:
+                    detections.append(
+                        Detection(
+                            label=pest_name,
+                            confidence=0.85,  # Slightly lower confidence for symptom analysis
+                            box=BoundingBox(
+                                x_min=float(bbox[0]),
+                                y_min=float(bbox[1]),
+                                x_max=float(bbox[2]),
+                                y_max=float(bbox[3]),
+                            ),
+                        )
+                    )
+
+        # Create answer with pest information
+        answers: List[VisionLanguageAnswer] = []
+        if pest_analysis:
+            pest_name = pest_analysis.get("pest", "Unknown")
+            symptoms = pest_analysis.get("symptoms", "")
+            remedy = pest_analysis.get("remedy", "")
+            damage_severity = pest_analysis.get("damageSeverity", "UNKNOWN")
+            pest_stage = pest_analysis.get("pestStage", "Unknown")
+
+            answer_text = f"**{pest_name}**\n\n"
+            answer_text += f"**Stage:** {pest_stage}\n"
+            answer_text += f"**Damage Severity:** {damage_severity}\n\n"
+            answer_text += f"**Symptoms:**\n{symptoms}\n\n"
+            answer_text += f"**Remedy:**\n{remedy}"
+
+            answers.append(VisionLanguageAnswer(
+                answer=answer_text,
+                confidence=0.9
+            ))
+
+        logger.info("CLIP VLM detected %d pests/diseases", len(detections))
+
+        return {
+            "detections": detections,
+            "answers": answers
+        }
+
+
 # Database configuration and initialization
 DB_PATH = os.getenv("INFERENCE_DB_PATH", "./storage/inference.db")
 
@@ -786,6 +946,36 @@ def register_default_models():
         ),
     )
 
+    # CLIP VLM External API Model
+    clip_vlm = ModelCard(
+        id="clip_vlm",
+        name="CLIP VLM Pest Detector (External API)",
+        description=(
+            "External CLIP-based Vision Language Model for comprehensive pest detection and analysis. "
+            "Provides detailed pest identification, bounding boxes, damage severity assessment, "
+            "symptoms analysis, and remediation recommendations. Supports multiple crops including "
+            "chilli and other agricultural plants. Note: Requires image_url, user_id, and crop "
+            "information to be provided in the request."
+        ),
+        task=ModelTask.object_detection,
+        framework="clip",
+        tags=["vlm", "clip", "pest-detection", "external-api", "comprehensive-analysis"],
+        default_prompt=None,
+        capabilities=[
+            "object-detection",
+            "bounding-box",
+            "pest-detection",
+            "damage-assessment",
+            "symptom-analysis",
+            "remedy-recommendation",
+            "multi-crop"
+        ],
+    )
+    registry.register(
+        clip_vlm,
+        lambda card=clip_vlm: ClipVLMRunner(card=card),
+    )
+
 
 register_default_models()
 
@@ -906,7 +1096,17 @@ async def run_inference(payload: InferenceRequest):
 
     start = time.perf_counter()
     try:
-        outputs = runner.infer(image=image, prompt=payload.prompt)
+        # Special handling for clip_vlm model - pass context as JSON prompt
+        if payload.model_id == "clip_vlm":
+            context = {
+                "image_url": str(payload.image_url) if payload.image_url else None,
+                "user_id": payload.user_id or "unknown",
+                "crop": payload.crop or "unknown"
+            }
+            prompt = json.dumps(context)
+            outputs = runner.infer(image=image, prompt=prompt)
+        else:
+            outputs = runner.infer(image=image, prompt=payload.prompt)
     except Exception as exc:  # pragma: no cover - runtime safeguard
         logger.exception("Inference failed: %s", exc)
         raise HTTPException(status_code=500, detail="Inference failed") from exc

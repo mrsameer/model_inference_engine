@@ -78,6 +78,10 @@ class InferenceRequest(BaseModel):
         default=None,
         description="Optional crop type (e.g., 'maize', 'paddy', 'cotton')",
     )
+    task: str | None = Field(
+        default=None,
+        description="Optional task type for CLIP VLM (e.g., 'pest', 'disease', 'nutrient')",
+    )
     prompt: str | None = Field(
         default=None,
         description="Optional text prompt or question for vision-language models",
@@ -504,6 +508,7 @@ class ClipVLMRunner(BaseModelRunner):
         - image_url: URL to the image
         - user_id: User identifier
         - crop: Crop type
+        - task: Task type (e.g., 'pest', 'disease', 'nutrient')
         """
         # Parse the prompt to extract context
         try:
@@ -515,6 +520,7 @@ class ClipVLMRunner(BaseModelRunner):
         image_url = context.get("image_url")
         user_id = context.get("user_id", "unknown")
         crop = context.get("crop", "unknown")
+        task = context.get("task", "pest")
 
         if not image_url:
             raise ValueError("image_url is required in prompt for clip_vlm model")
@@ -522,14 +528,16 @@ class ClipVLMRunner(BaseModelRunner):
         # Prepare the request payload
         payload = {
             "image_url": image_url,
-            "task": "pest",
+            "task": task,
             "optional_text": {
                 "user_id": user_id,
                 "crop": crop
             }
         }
 
-        logger.info("Calling CLIP VLM API for user=%s, crop=%s", user_id, crop)
+        logger.info("Calling CLIP VLM API for user=%s, crop=%s, task=%s", user_id, crop, task)
+        logger.info("CLIP VLM API Request - URL: %s", self.API_URL)
+        logger.info("CLIP VLM API Request - Payload: %s", json.dumps(payload, indent=2))
 
         # Make the API call with extended timeout
         try:
@@ -1101,7 +1109,8 @@ async def run_inference(payload: InferenceRequest):
             context = {
                 "image_url": str(payload.image_url) if payload.image_url else None,
                 "user_id": payload.user_id or "unknown",
-                "crop": payload.crop or "unknown"
+                "crop": payload.crop or "unknown",
+                "task": payload.task or "pest"
             }
             prompt = json.dumps(context)
             outputs = runner.infer(image=image, prompt=prompt)

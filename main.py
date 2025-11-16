@@ -74,6 +74,10 @@ class InferenceRequest(BaseModel):
         default=None,
         description="Optional user identifier for tracking inference requests",
     )
+    crop: str | None = Field(
+        default=None,
+        description="Optional crop type (e.g., 'maize', 'paddy', 'cotton')",
+    )
     prompt: str | None = Field(
         default=None,
         description="Optional text prompt or question for vision-language models",
@@ -103,6 +107,7 @@ class InferenceHistoryItem(BaseModel):
     id: int
     user_id: str | None
     model_id: str
+    crop: str | None
     image_source: str
     image_url: str | None
     prompt: str | None
@@ -499,6 +504,7 @@ def init_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT,
             model_id TEXT NOT NULL,
+            crop TEXT,
             image_source TEXT NOT NULL,
             image_url TEXT,
             prompt TEXT,
@@ -521,6 +527,14 @@ def init_database():
         ON inference_logs(created_at)
     """)
 
+    # Migration: Add crop column if it doesn't exist (for existing databases)
+    try:
+        cursor.execute("SELECT crop FROM inference_logs LIMIT 1")
+    except sqlite3.OperationalError:
+        logger.info("Adding crop column to existing database...")
+        cursor.execute("ALTER TABLE inference_logs ADD COLUMN crop TEXT")
+        conn.commit()
+
     conn.commit()
     conn.close()
     logger.info("Database initialized at: %s", db_path)
@@ -529,6 +543,7 @@ def init_database():
 def log_inference_to_db(
     user_id: str | None,
     model_id: str,
+    crop: str | None,
     image_source: str,
     image_url: str | None,
     prompt: str | None,
@@ -547,12 +562,13 @@ def log_inference_to_db(
 
         cursor.execute("""
             INSERT INTO inference_logs
-            (user_id, model_id, image_source, image_url, prompt, duration_ms,
+            (user_id, model_id, crop, image_source, image_url, prompt, duration_ms,
              detections_count, detections_json, answers_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             user_id,
             model_id,
+            crop,
             image_source,
             image_url,
             prompt,
@@ -564,8 +580,8 @@ def log_inference_to_db(
 
         conn.commit()
         conn.close()
-        logger.info("Logged inference to database: user=%s, model=%s, detections=%d",
-                   user_id, model_id, detections_count)
+        logger.info("Logged inference to database: user=%s, model=%s, crop=%s, detections=%d",
+                   user_id, model_id, crop, detections_count)
     except Exception as exc:
         logger.error("Failed to log inference to database: %s", exc)
 
@@ -592,7 +608,7 @@ def get_user_history(
         # Get paginated results
         offset = (page - 1) * page_size
         cursor.execute("""
-            SELECT id, user_id, model_id, image_source, image_url, prompt,
+            SELECT id, user_id, model_id, crop, image_source, image_url, prompt,
                    duration_ms, detections_count, detections_json, answers_json,
                    created_at
             FROM inference_logs
@@ -620,6 +636,7 @@ def get_user_history(
                 id=row["id"],
                 user_id=row["user_id"],
                 model_id=row["model_id"],
+                crop=row["crop"],
                 image_source=row["image_source"],
                 image_url=row["image_url"],
                 prompt=row["prompt"],
@@ -934,6 +951,7 @@ async def run_inference(payload: InferenceRequest):
     log_inference_to_db(
         user_id=payload.user_id,
         model_id=payload.model_id,
+        crop=payload.crop,
         image_source=image_source,
         image_url=image_url_str,
         prompt=payload.prompt,

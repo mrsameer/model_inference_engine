@@ -4,15 +4,20 @@ import base64
 import io
 import logging
 import os
+import tempfile
 import threading
 import time
 from enum import Enum
 from typing import Any, Callable, Dict, List
 
 import httpx
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from PIL import Image
 from pydantic import BaseModel, Field, HttpUrl, model_validator
+
+# Load environment variables for API keys
+load_dotenv()
 
 
 logger = logging.getLogger("model_inference_engine")
@@ -189,6 +194,240 @@ class VisionLanguageRunner(BaseModelRunner):
         return {"answers": answers}
 
 
+class GeminiVLMRunner(BaseModelRunner):
+    """Runs Gemini Vision Language Model for object detection with bounding boxes."""
+
+    # Pest and disease configuration by crop type
+    PEST_CONFIGS = {
+        "maize": {
+            "pests": ["fall_army_worm"],
+            "description": "Fall Army Worm on maize/corn crops",
+            "detection_details": {
+                "fall_army_worm": "Fall Army Worm larvae - look for caterpillars with distinctive inverted Y marking on head"
+            },
+        },
+        "paddy": {
+            "pests": ["sheath_blight", "brown_plant_hopper"],
+            "description": "Sheath Blight disease and Brown Plant Hopper (BPH) on paddy/rice crops",
+            "detection_details": {
+                "sheath_blight": "Sheath Blight - fungal disease with oval/irregular lesions on leaf sheaths",
+                "brown_plant_hopper": "Brown Plant Hopper (BPH) - small brown insects at base of rice plants"
+            },
+        },
+        "cotton": {
+            "pests": ["pink_boll_worm", "white_fly"],
+            "description": "Pink Boll Worm and White Fly on cotton crops",
+            "detection_details": {
+                "pink_boll_worm": "Pink Boll Worm - larvae or damage to cotton bolls with entry holes",
+                "white_fly": "White Fly - tiny white insects, usually on underside of leaves"
+            },
+        },
+        "all": {
+            "pests": ["fall_army_worm", "sheath_blight", "brown_plant_hopper", "pink_boll_worm", "white_fly"],
+            "description": "All supported pests and diseases across maize, paddy, and cotton crops",
+            "detection_details": {
+                "fall_army_worm": "Fall Army Worm larvae on maize",
+                "sheath_blight": "Sheath Blight disease on paddy",
+                "brown_plant_hopper": "Brown Plant Hopper on paddy",
+                "pink_boll_worm": "Pink Boll Worm on cotton",
+                "white_fly": "White Fly on cotton"
+            },
+        }
+    }
+
+    def __init__(self, card: ModelCard, model_name: str = "gemini-2.5-flash", crop_type: str = "all"):
+        super().__init__(card)
+        self.model_name = model_name
+        self.crop_type = crop_type
+        self._client = None
+        self._lock = threading.Lock()
+        self.api_key = os.getenv("GEMINI_API_KEY")
+        if not self.api_key:
+            logger.warning("GEMINI_API_KEY not found in environment. Gemini VLM will not work.")
+
+    def _ensure_client(self):
+        """Initialize Gemini client lazily."""
+        if self._client is None:
+            with self._lock:
+                if self._client is None:
+                    from google import genai  # pylint: disable=import-error
+
+                    if not self.api_key:
+                        raise ValueError("GEMINI_API_KEY not found in .env file")
+
+                    logger.info("Initializing Gemini client with model: %s", self.model_name)
+                    self._client = genai.Client(api_key=self.api_key)
+        return self._client
+
+    def _build_system_instruction(self, crop_type: str) -> str:
+        """Build system instruction for Gemini based on crop type."""
+        config = self.PEST_CONFIGS[crop_type]
+        pests_list = config["pests"]
+        detection_details = config["detection_details"]
+
+        instruction = f"""
+        You are an expert agricultural entomologist and plant pathologist specialized in detecting pests and diseases.
+
+        CROP TYPE: {crop_type.upper()}
+        DESCRIPTION: {config["description"]}
+
+        DETECTION TARGETS:
+        """
+
+        for pest in pests_list:
+            instruction += f"\n        - {pest}: {detection_details[pest]}"
+
+        instruction += """
+
+        INSTRUCTIONS:
+        - Return bounding boxes as an array with labels and confidence scores
+        - Never return masks. Limit to 25 objects.
+        - Only detect the pests/diseases listed above - do not detect other objects
+        - If an object is present multiple times, give each a unique label with position descriptor
+        - Use label format: pest_name (e.g., "fall_army_worm", "sheath_blight") followed by position if multiple
+        - Confidence should reflect detection certainty (0.0 to 1.0)
+        - Only include detections with confidence > 0.5
+        - Be especially careful to distinguish between different pest types
+        - For diseases, detect visible symptoms like lesions, discoloration, or damage patterns
+        """
+
+        return instruction
+
+    def _build_detection_prompt(self, crop_type: str) -> str:
+        """Build detection prompt for Gemini based on crop type."""
+        config = self.PEST_CONFIGS[crop_type]
+        pests_list = ", ".join(config["pests"])
+        return f"Detect all instances of {pests_list} in this agricultural image. Provide bounding boxes with labels and confidence scores."
+
+    def _upload_image_to_gemini(self, client, image: Image.Image) -> str:
+        """Upload image to Gemini Files API."""
+        from google.genai.types import UploadFileConfig  # pylint: disable=import-error
+
+        # Convert image to bytes
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='JPEG')
+        img_byte_arr.seek(0)
+
+        # Upload to Gemini Files API
+        uploaded_file = client.files.upload(
+            file=img_byte_arr,
+            config=UploadFileConfig(mime_type='image/jpeg')
+        )
+        return uploaded_file.uri
+
+    def _get_pest_base_name(self, label: str) -> str:
+        """Extract the base pest name from a label with position descriptor."""
+        all_pests = set()
+        for config in self.PEST_CONFIGS.values():
+            all_pests.update(config["pests"])
+
+        for pest in all_pests:
+            if label.startswith(pest):
+                return pest
+
+        return label
+
+    def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, List[Detection]]:  # noqa: ARG002
+        """Run Gemini VLM inference for object detection."""
+        from google.genai.types import (  # pylint: disable=import-error
+            GenerateContentConfig,
+            HarmBlockThreshold,
+            HarmCategory,
+            Part,
+            SafetySetting,
+        )
+        from pydantic import BaseModel as PydanticBaseModel  # pylint: disable=import-error
+
+        # Determine crop type from prompt if provided
+        crop_type = self.crop_type
+        if prompt:
+            prompt_lower = prompt.lower()
+            for crop in self.PEST_CONFIGS.keys():
+                if crop in prompt_lower:
+                    crop_type = crop
+                    logger.info("Detected crop type from prompt: %s", crop_type)
+                    break
+
+        if crop_type not in self.PEST_CONFIGS:
+            logger.warning("Invalid crop type '%s', defaulting to 'all'", crop_type)
+            crop_type = "all"
+
+        # Pydantic model for Gemini's native bounding box format
+        class GeminiBoundingBox(PydanticBaseModel):
+            box_2d: list[int]
+            label: str
+            confidence: float
+
+        client = self._ensure_client()
+
+        # Upload image to Gemini Files API
+        logger.info("Uploading image to Gemini Files API...")
+        file_uri = self._upload_image_to_gemini(client, image)
+        width, height = image.size
+        logger.info("Image uploaded. Size: %dx%d", width, height)
+
+        # Build system instruction and prompt for the crop type
+        system_instruction = self._build_system_instruction(crop_type)
+        detection_prompt = self._build_detection_prompt(crop_type)
+
+        # Configure the model with system instructions and structured output
+        config = GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.3,
+            safety_settings=[
+                SafetySetting(
+                    category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                    threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                ),
+            ],
+            response_mime_type="application/json",
+            response_schema=list[GeminiBoundingBox],
+        )
+
+        # Generate content with structured output
+        logger.info("Running Gemini %s detection for crop: %s", self.model_name, crop_type)
+        response = client.models.generate_content(
+            model=self.model_name,
+            contents=[
+                Part.from_uri(file_uri=file_uri, mime_type="image/jpeg"),
+                detection_prompt,
+            ],
+            config=config,
+        )
+
+        # Get the parsed structured output
+        gemini_boxes = response.parsed
+
+        # Convert Gemini's normalized bounding boxes to YOLO-style pixel coordinates
+        detections: List[Detection] = []
+        for bbox in gemini_boxes:
+            # Gemini format: [y_min, x_min, y_max, x_max] normalized to 0-1000
+            y_min_norm, x_min_norm, y_max_norm, x_max_norm = bbox.box_2d
+
+            # Convert to pixel coordinates
+            x_min = int(x_min_norm / 1000 * width)
+            y_min = int(y_min_norm / 1000 * height)
+            x_max = int(x_max_norm / 1000 * width)
+            y_max = int(y_max_norm / 1000 * height)
+
+            # Create YOLO-style detection
+            detections.append(
+                Detection(
+                    label=bbox.label,
+                    confidence=bbox.confidence,
+                    box=BoundingBox(
+                        x_min=float(x_min),
+                        y_min=float(y_min),
+                        x_max=float(x_max),
+                        y_max=float(y_max),
+                    ),
+                )
+            )
+
+        logger.info("Gemini detected %d pests/diseases", len(detections))
+        return {"detections": detections}
+
+
 class ModelRegistry:
     """Registry for supported inference models and their runners."""
 
@@ -286,6 +525,39 @@ def register_default_models():
             card=card,
             weights="models/pest_fall_army_warm_ss.pt",
             conf_threshold=0.25,
+        ),
+    )
+
+    # Gemini VLM Multi-Pest Detection Model
+    vlm_ss = ModelCard(
+        id="vlm_ss",
+        name="Gemini Multi-Pest Detector (VLM)",
+        description=(
+            "Gemini 2.5 Vision Language Model with native bounding box detection for agricultural pest identification. "
+            "Supports Fall Army Worm (maize), Sheath Blight & Brown Plant Hopper (paddy), "
+            "and Pink Boll Worm & White Fly (cotton). Zero-shot detection with flexible prompting. "
+            "Specify crop type in prompt (e.g., 'maize', 'paddy', 'cotton', or 'all')."
+        ),
+        task=ModelTask.object_detection,
+        framework="gemini",
+        tags=["vlm", "vision-language", "pest-detection", "multi-crop", "zero-shot", "agriculture"],
+        default_prompt="all",
+        capabilities=[
+            "object-detection",
+            "bounding-box",
+            "pest-detection",
+            "disease-detection",
+            "multi-crop",
+            "zero-shot",
+            "flexible-prompting"
+        ],
+    )
+    registry.register(
+        vlm_ss,
+        lambda card=vlm_ss: GeminiVLMRunner(
+            card=card,
+            model_name="gemini-2.5-flash",
+            crop_type="all",
         ),
     )
 

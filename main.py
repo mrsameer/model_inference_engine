@@ -591,6 +591,7 @@ class ClipVLMRunner(BaseModelRunner):
             bboxes = pest_analysis.get("bbox", [])
 
             # Each bbox is [x_min, y_min, x_max, y_max]
+            # Support multiple detections by iterating through all bboxes
             for bbox in bboxes:
                 if len(bbox) == 4:
                     detections.append(
@@ -606,9 +607,32 @@ class ClipVLMRunner(BaseModelRunner):
                         )
                     )
 
+        # Process disease_analysis
+        disease_analysis = results_data.get("disease_analysis", {})
+        if disease_analysis:
+            disease_name = disease_analysis.get("disease", "Unknown")
+            bboxes = disease_analysis.get("bbox", [])
+
+            # Each bbox is [x_min, y_min, x_max, y_max]
+            # Support multiple detections by iterating through all bboxes
+            for bbox in bboxes:
+                if len(bbox) == 4:
+                    detections.append(
+                        Detection(
+                            label=disease_name,
+                            confidence=0.9,  # Default confidence
+                            box=BoundingBox(
+                                x_min=float(bbox[0]),
+                                y_min=float(bbox[1]),
+                                x_max=float(bbox[2]),
+                                y_max=float(bbox[3]),
+                            ),
+                        )
+                    )
+
         # Also process pest_symptom_analysis if needed
         pest_symptom = results_data.get("pest_symptom_analysis", {})
-        if pest_symptom and not pest_analysis:  # Only if pest_analysis didn't provide results
+        if pest_symptom and not pest_analysis and not disease_analysis:  # Only if no other analysis provided results
             pest_name = pest_symptom.get("pest", "Unknown")
             bboxes = pest_symptom.get("bbox", [])
 
@@ -627,18 +651,41 @@ class ClipVLMRunner(BaseModelRunner):
                         )
                     )
 
-        # Create answer with pest information
+        # Create answer with pest/disease information
         answers: List[VisionLanguageAnswer] = []
+
+        # Handle pest analysis
         if pest_analysis:
             pest_name = pest_analysis.get("pest", "Unknown")
             symptoms = pest_analysis.get("symptoms", "")
             remedy = pest_analysis.get("remedy", "")
             damage_severity = pest_analysis.get("damageSeverity", "UNKNOWN")
             pest_stage = pest_analysis.get("pestStage", "Unknown")
+            pest_harm_level = pest_analysis.get("pestHarmLevel", "UNKNOWN")
 
             answer_text = f"**{pest_name}**\n\n"
             answer_text += f"**Stage:** {pest_stage}\n"
-            answer_text += f"**Damage Severity:** {damage_severity}\n\n"
+            answer_text += f"**Damage Severity:** {damage_severity}\n"
+            answer_text += f"**Pest Harm Level:** {pest_harm_level}\n\n"
+            answer_text += f"**Symptoms:**\n{symptoms}\n\n"
+            answer_text += f"**Remedy:**\n{remedy}"
+
+            answers.append(VisionLanguageAnswer(
+                answer=answer_text,
+                confidence=0.9
+            ))
+
+        # Handle disease analysis
+        if disease_analysis:
+            disease_name = disease_analysis.get("disease", "Unknown")
+            symptoms = disease_analysis.get("symptoms", "")
+            remedy = disease_analysis.get("remedy", "")
+            severity_level = disease_analysis.get("severityLevel", "UNKNOWN")
+            damage_level = disease_analysis.get("damageLevel", "UNKNOWN")
+
+            answer_text = f"**{disease_name}**\n\n"
+            answer_text += f"**Severity Level:** {severity_level}\n"
+            answer_text += f"**Damage Level:** {damage_level}\n\n"
             answer_text += f"**Symptoms:**\n{symptoms}\n\n"
             answer_text += f"**Remedy:**\n{remedy}"
 
@@ -957,22 +1004,24 @@ def register_default_models():
     # CLIP VLM External API Model
     clip_vlm = ModelCard(
         id="clip_vlm",
-        name="CLIP VLM Pest Detector (External API)",
+        name="CLIP VLM Pest & Disease Detector (External API)",
         description=(
-            "External CLIP-based Vision Language Model for comprehensive pest detection and analysis. "
-            "Provides detailed pest identification, bounding boxes, damage severity assessment, "
-            "symptoms analysis, and remediation recommendations. Supports multiple crops including "
-            "chilli and other agricultural plants. Note: Requires image_url, user_id, and crop "
+            "External CLIP-based Vision Language Model for comprehensive pest and disease detection and analysis. "
+            "Provides detailed identification, multiple bounding boxes for multiple detections, damage severity assessment, "
+            "symptoms analysis, and remediation recommendations. Supports both pest and disease tasks across multiple crops including "
+            "maize, paddy, cotton, chilli and other agricultural plants. Note: Requires image_url, user_id, crop, and task "
             "information to be provided in the request."
         ),
         task=ModelTask.object_detection,
         framework="clip",
-        tags=["vlm", "clip", "pest-detection", "external-api", "comprehensive-analysis"],
+        tags=["vlm", "clip", "pest-detection", "disease-detection", "external-api", "comprehensive-analysis"],
         default_prompt=None,
         capabilities=[
             "object-detection",
             "bounding-box",
             "pest-detection",
+            "disease-detection",
+            "multiple-detections",
             "damage-assessment",
             "symptom-analysis",
             "remedy-recommendation",

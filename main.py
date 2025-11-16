@@ -494,8 +494,8 @@ class GeminiVLMRunner(BaseModelRunner):
 class ClipVLMRunner(BaseModelRunner):
     """Runs CLIP VLM for pest detection via external API."""
 
-    API_URL = "https://implicit-jeannetta-attendantly.ngrok-free.dev/analyze"
-    TIMEOUT = 900  # 15 minutes (more than 10 minutes as requested)
+    API_URL = "http://acerkrishidss.vassarlabs.com/clip_vlm/analyze"
+    TIMEOUT = 1200
 
     def __init__(self, card: ModelCard):
         super().__init__(card)

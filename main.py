@@ -1,19 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
 import logging
 import os
-import sqlite3
 import tempfile
 import threading
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
+import aiosqlite
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -135,7 +137,7 @@ class BaseModelRunner:
     def __init__(self, card: ModelCard):
         self.card = card
 
-    def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, Any]:
+    async def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, Any]:
         raise NotImplementedError
 
 
@@ -162,7 +164,8 @@ class YoloRunner(BaseModelRunner):
                     self._model = YOLO(self.weights)
         return self._model
 
-    def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, List[Detection]]:  # noqa: ARG002
+    def _infer_sync(self, image: Image.Image, prompt: str | None) -> Dict[str, List[Detection]]:  # noqa: ARG002
+        """Synchronous inference implementation."""
         model = self._ensure_model()
         results = model.predict(image, conf=self.conf_threshold, verbose=False)
         if not results:
@@ -196,6 +199,10 @@ class YoloRunner(BaseModelRunner):
             )
         return {"detections": detections}
 
+    async def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, List[Detection]]:
+        """Async inference wrapper."""
+        return await asyncio.to_thread(self._infer_sync, image, prompt)
+
 
 class VisionLanguageRunner(BaseModelRunner):
     """Runs visual question answering models using Hugging Face pipelines."""
@@ -221,7 +228,8 @@ class VisionLanguageRunner(BaseModelRunner):
                     )
         return self._pipeline
 
-    def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, List[VisionLanguageAnswer]]:
+    def _infer_sync(self, image: Image.Image, prompt: str | None) -> Dict[str, List[VisionLanguageAnswer]]:
+        """Synchronous inference implementation."""
         qa_pipeline = self._ensure_pipeline()
         question = prompt or "Describe the image"
         outputs = qa_pipeline(image=image, question=question, top_k=self.top_k)
@@ -230,6 +238,10 @@ class VisionLanguageRunner(BaseModelRunner):
             for item in outputs
         ]
         return {"answers": answers}
+
+    async def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, List[VisionLanguageAnswer]]:
+        """Async inference wrapper."""
+        return await asyncio.to_thread(self._infer_sync, image, prompt)
 
 
 # Static descriptions and remedies for each pest/disease
@@ -390,8 +402,8 @@ class GeminiVLMRunner(BaseModelRunner):
 
         return label
 
-    def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, List[Detection]]:  # noqa: ARG002
-        """Run Gemini VLM inference for object detection."""
+    def _infer_sync(self, image: Image.Image, prompt: str | None) -> Dict[str, List[Detection]]:  # noqa: ARG002
+        """Synchronous inference implementation for Gemini VLM."""
         from google.genai.types import (  # pylint: disable=import-error
             GenerateContentConfig,
             HarmBlockThreshold,
@@ -490,6 +502,10 @@ class GeminiVLMRunner(BaseModelRunner):
         logger.info("Gemini detected %d pests/diseases", len(detections))
         return {"detections": detections}
 
+    async def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, List[Detection]]:
+        """Async inference wrapper."""
+        return await asyncio.to_thread(self._infer_sync, image, prompt)
+
 
 class ClipVLMRunner(BaseModelRunner):
     """Runs CLIP VLM for pest detection via external API."""
@@ -500,7 +516,7 @@ class ClipVLMRunner(BaseModelRunner):
     def __init__(self, card: ModelCard):
         super().__init__(card)
 
-    def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, Any]:  # noqa: ARG002
+    async def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, Any]:  # noqa: ARG002
         """
         Run CLIP VLM inference via external API.
 
@@ -541,8 +557,8 @@ class ClipVLMRunner(BaseModelRunner):
 
         # Make the API call with extended timeout
         try:
-            with httpx.Client(timeout=self.TIMEOUT) as client:
-                response = client.post(
+            async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
+                response = await client.post(
                     self.API_URL,
                     json=payload,
                     headers={"Content-Type": "application/json"}
@@ -706,56 +722,53 @@ class ClipVLMRunner(BaseModelRunner):
 DB_PATH = os.getenv("INFERENCE_DB_PATH", "./storage/inference.db")
 
 
-def init_database():
+async def init_database():
     """Initialize SQLite database with inference logging table."""
     db_path = Path(DB_PATH)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
+    async with aiosqlite.connect(str(db_path)) as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS inference_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT,
+                model_id TEXT NOT NULL,
+                crop TEXT,
+                image_source TEXT NOT NULL,
+                image_url TEXT,
+                prompt TEXT,
+                duration_ms REAL NOT NULL,
+                detections_count INTEGER DEFAULT 0,
+                detections_json TEXT,
+                answers_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS inference_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
-            model_id TEXT NOT NULL,
-            crop TEXT,
-            image_source TEXT NOT NULL,
-            image_url TEXT,
-            prompt TEXT,
-            duration_ms REAL NOT NULL,
-            detections_count INTEGER DEFAULT 0,
-            detections_json TEXT,
-            answers_json TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        # Create index for faster user-based queries
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_id
+            ON inference_logs(user_id)
+        """)
 
-    # Create index for faster user-based queries
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_user_id
-        ON inference_logs(user_id)
-    """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_created_at
+            ON inference_logs(created_at)
+        """)
 
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_created_at
-        ON inference_logs(created_at)
-    """)
+        # Migration: Add crop column if it doesn't exist (for existing databases)
+        try:
+            await conn.execute("SELECT crop FROM inference_logs LIMIT 1")
+        except aiosqlite.OperationalError:
+            logger.info("Adding crop column to existing database...")
+            await conn.execute("ALTER TABLE inference_logs ADD COLUMN crop TEXT")
+            await conn.commit()
 
-    # Migration: Add crop column if it doesn't exist (for existing databases)
-    try:
-        cursor.execute("SELECT crop FROM inference_logs LIMIT 1")
-    except sqlite3.OperationalError:
-        logger.info("Adding crop column to existing database...")
-        cursor.execute("ALTER TABLE inference_logs ADD COLUMN crop TEXT")
-        conn.commit()
-
-    conn.commit()
-    conn.close()
+        await conn.commit()
     logger.info("Database initialized at: %s", db_path)
 
 
-def log_inference_to_db(
+async def log_inference_to_db(
     user_id: str | None,
     model_id: str,
     crop: str | None,
@@ -768,72 +781,67 @@ def log_inference_to_db(
 ):
     """Log inference request and results to database."""
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+        async with aiosqlite.connect(DB_PATH) as conn:
+            detections_count = len(detections) if detections else 0
+            detections_json = json.dumps([d.model_dump() for d in detections]) if detections else None
+            answers_json = json.dumps([a.model_dump() for a in answers]) if answers else None
 
-        detections_count = len(detections) if detections else 0
-        detections_json = json.dumps([d.model_dump() for d in detections]) if detections else None
-        answers_json = json.dumps([a.model_dump() for a in answers]) if answers else None
+            await conn.execute("""
+                INSERT INTO inference_logs
+                (user_id, model_id, crop, image_source, image_url, prompt, duration_ms,
+                 detections_count, detections_json, answers_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                user_id,
+                model_id,
+                crop,
+                image_source,
+                image_url,
+                prompt,
+                duration_ms,
+                detections_count,
+                detections_json,
+                answers_json,
+            ))
 
-        cursor.execute("""
-            INSERT INTO inference_logs
-            (user_id, model_id, crop, image_source, image_url, prompt, duration_ms,
-             detections_count, detections_json, answers_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            user_id,
-            model_id,
-            crop,
-            image_source,
-            image_url,
-            prompt,
-            duration_ms,
-            detections_count,
-            detections_json,
-            answers_json,
-        ))
-
-        conn.commit()
-        conn.close()
+            await conn.commit()
         logger.info("Logged inference to database: user=%s, model=%s, crop=%s, detections=%d",
                    user_id, model_id, crop, detections_count)
     except Exception as exc:
         logger.error("Failed to log inference to database: %s", exc)
 
 
-def get_user_history(
+async def get_user_history(
     user_id: str,
     page: int = 1,
     page_size: int = 10
 ) -> tuple[int, List[InferenceHistoryItem]]:
     """Retrieve inference history for a user with pagination."""
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        async with aiosqlite.connect(DB_PATH) as conn:
+            conn.row_factory = aiosqlite.Row
 
-        # Get total count
-        cursor.execute("""
-            SELECT COUNT(*) as total
-            FROM inference_logs
-            WHERE user_id = ?
-        """, (user_id,))
-        total = cursor.fetchone()["total"]
+            # Get total count
+            async with conn.execute("""
+                SELECT COUNT(*) as total
+                FROM inference_logs
+                WHERE user_id = ?
+            """, (user_id,)) as cursor:
+                row = await cursor.fetchone()
+                total = row["total"]
 
-        # Get paginated results
-        offset = (page - 1) * page_size
-        cursor.execute("""
-            SELECT id, user_id, model_id, crop, image_source, image_url, prompt,
-                   duration_ms, detections_count, detections_json, answers_json,
-                   created_at
-            FROM inference_logs
-            WHERE user_id = ?
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
-        """, (user_id, page_size, offset))
-
-        rows = cursor.fetchall()
-        conn.close()
+            # Get paginated results
+            offset = (page - 1) * page_size
+            async with conn.execute("""
+                SELECT id, user_id, model_id, crop, image_source, image_url, prompt,
+                       duration_ms, detections_count, detections_json, answers_json,
+                       created_at
+                FROM inference_logs
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+            """, (user_id, page_size, offset)) as cursor:
+                rows = await cursor.fetchall()
 
         items = []
         for row in rows:
@@ -1036,8 +1044,16 @@ def register_default_models():
 
 register_default_models()
 
-# Initialize database on startup
-init_database()
+
+# Lifespan context manager for async startup/shutdown
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle startup and shutdown events."""
+    # Startup: Initialize database
+    await init_database()
+    yield
+    # Shutdown: cleanup if needed (none for now)
+
 
 app = FastAPI(
     title="Model Inference Engine",
@@ -1046,14 +1062,15 @@ app = FastAPI(
         "models packaged for containerized deployments."
     ),
     version="0.2.0",
+    lifespan=lifespan,
 )
 
 
-def _load_image(payload: InferenceRequest) -> Image.Image:
+async def _load_image(payload: InferenceRequest) -> Image.Image:
     if payload.image_base64:
         return _decode_base64_image(payload.image_base64)
     if payload.image_url:
-        return _download_image(payload.image_url)
+        return await _download_image(payload.image_url)
     raise ValueError("No image payload supplied")
 
 
@@ -1068,10 +1085,10 @@ def _decode_base64_image(data: str) -> Image.Image:
         raise ValueError("Invalid base64 image payload") from exc
 
 
-def _download_image(url: HttpUrl) -> Image.Image:
+async def _download_image(url: HttpUrl) -> Image.Image:
     try:
-        with httpx.Client(follow_redirects=True, timeout=15) as client:
-            response = client.get(str(url))
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+            response = await client.get(str(url))
             response.raise_for_status()
     except httpx.HTTPError as exc:
         raise ValueError(f"Unable to download image: {exc}") from exc
@@ -1126,7 +1143,7 @@ async def get_history(
         raise HTTPException(status_code=400, detail="Page size must be between 1 and 100")
 
     try:
-        total, items = get_user_history(user_id, page, page_size)
+        total, items = await get_user_history(user_id, page, page_size)
         return InferenceHistoryResponse(
             total=total,
             page=page,
@@ -1147,7 +1164,7 @@ async def run_inference(payload: InferenceRequest):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     try:
-        image = _load_image(payload)
+        image = await _load_image(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1162,9 +1179,9 @@ async def run_inference(payload: InferenceRequest):
                 "task": payload.task or "pest"
             }
             prompt = json.dumps(context)
-            outputs = runner.infer(image=image, prompt=prompt)
+            outputs = await runner.infer(image=image, prompt=prompt)
         else:
-            outputs = runner.infer(image=image, prompt=payload.prompt)
+            outputs = await runner.infer(image=image, prompt=payload.prompt)
     except Exception as exc:  # pragma: no cover - runtime safeguard
         logger.exception("Inference failed: %s", exc)
         raise HTTPException(status_code=500, detail="Inference failed") from exc
@@ -1206,7 +1223,7 @@ async def run_inference(payload: InferenceRequest):
     # Log to database
     image_source = "base64" if payload.image_base64 else "url"
     image_url_str = str(payload.image_url) if payload.image_url else None
-    log_inference_to_db(
+    await log_inference_to_db(
         user_id=payload.user_id,
         model_id=payload.model_id,
         crop=payload.crop,

@@ -11,10 +11,14 @@ services:
       - "5000:5000"
     environment:
       UVICORN_WORKERS: "1"
+      INFERENCE_DB_PATH: "/storage/inference.db"
     volumes:
       - models-cache:/models
+      - inference-storage:/storage
     restart: unless-stopped
 
 volumes:
   models-cache:
+    driver: local
+  inference-storage:
     driver: local

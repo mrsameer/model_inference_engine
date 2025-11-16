@@ -31,8 +31,8 @@ RUN pip install --no-cache-dir uv \
     && uv sync --frozen --no-dev --python /usr/local/bin/python
 
 COPY . .
-RUN mkdir -p /models/huggingface /models/ultralytics /tmp/ultralytics \
-    && chmod -R 777 /tmp/ultralytics
+RUN mkdir -p /models/huggingface /models/ultralytics /tmp/ultralytics /storage \
+    && chmod -R 777 /tmp/ultralytics /storage
 
 EXPOSE 5000
 

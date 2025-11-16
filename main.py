@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import logging
 import os
+import sqlite3
 import tempfile
 import threading
 import time
+from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 import httpx
@@ -66,6 +70,10 @@ class VisionLanguageAnswer(BaseModel):
 
 class InferenceRequest(BaseModel):
     model_id: str = Field(..., description="Identifier returned from /models")
+    user_id: str | None = Field(
+        default=None,
+        description="Optional user identifier for tracking inference requests",
+    )
     prompt: str | None = Field(
         default=None,
         description="Optional text prompt or question for vision-language models",
@@ -89,6 +97,27 @@ class InferenceResponse(BaseModel):
     duration_ms: float = Field(..., gt=0)
     detections: List[Detection] | None = None
     answers: List[VisionLanguageAnswer] | None = None
+
+
+class InferenceHistoryItem(BaseModel):
+    id: int
+    user_id: str | None
+    model_id: str
+    image_source: str
+    image_url: str | None
+    prompt: str | None
+    duration_ms: float
+    detections_count: int
+    detections: List[Detection] | None = None
+    answers: List[VisionLanguageAnswer] | None = None
+    created_at: str
+
+
+class InferenceHistoryResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[InferenceHistoryItem]
 
 
 class BaseModelRunner:
@@ -453,6 +482,160 @@ class GeminiVLMRunner(BaseModelRunner):
         return {"detections": detections}
 
 
+# Database configuration and initialization
+DB_PATH = os.getenv("INFERENCE_DB_PATH", "./storage/inference.db")
+
+
+def init_database():
+    """Initialize SQLite database with inference logging table."""
+    db_path = Path(DB_PATH)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS inference_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            model_id TEXT NOT NULL,
+            image_source TEXT NOT NULL,
+            image_url TEXT,
+            prompt TEXT,
+            duration_ms REAL NOT NULL,
+            detections_count INTEGER DEFAULT 0,
+            detections_json TEXT,
+            answers_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Create index for faster user-based queries
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_id
+        ON inference_logs(user_id)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_created_at
+        ON inference_logs(created_at)
+    """)
+
+    conn.commit()
+    conn.close()
+    logger.info("Database initialized at: %s", db_path)
+
+
+def log_inference_to_db(
+    user_id: str | None,
+    model_id: str,
+    image_source: str,
+    image_url: str | None,
+    prompt: str | None,
+    duration_ms: float,
+    detections: List[Detection] | None,
+    answers: List[VisionLanguageAnswer] | None,
+):
+    """Log inference request and results to database."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        detections_count = len(detections) if detections else 0
+        detections_json = json.dumps([d.model_dump() for d in detections]) if detections else None
+        answers_json = json.dumps([a.model_dump() for a in answers]) if answers else None
+
+        cursor.execute("""
+            INSERT INTO inference_logs
+            (user_id, model_id, image_source, image_url, prompt, duration_ms,
+             detections_count, detections_json, answers_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            model_id,
+            image_source,
+            image_url,
+            prompt,
+            duration_ms,
+            detections_count,
+            detections_json,
+            answers_json,
+        ))
+
+        conn.commit()
+        conn.close()
+        logger.info("Logged inference to database: user=%s, model=%s, detections=%d",
+                   user_id, model_id, detections_count)
+    except Exception as exc:
+        logger.error("Failed to log inference to database: %s", exc)
+
+
+def get_user_history(
+    user_id: str,
+    page: int = 1,
+    page_size: int = 10
+) -> tuple[int, List[InferenceHistoryItem]]:
+    """Retrieve inference history for a user with pagination."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Get total count
+        cursor.execute("""
+            SELECT COUNT(*) as total
+            FROM inference_logs
+            WHERE user_id = ?
+        """, (user_id,))
+        total = cursor.fetchone()["total"]
+
+        # Get paginated results
+        offset = (page - 1) * page_size
+        cursor.execute("""
+            SELECT id, user_id, model_id, image_source, image_url, prompt,
+                   duration_ms, detections_count, detections_json, answers_json,
+                   created_at
+            FROM inference_logs
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, (user_id, page_size, offset))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        items = []
+        for row in rows:
+            detections = None
+            if row["detections_json"]:
+                detections_data = json.loads(row["detections_json"])
+                detections = [Detection(**d) for d in detections_data]
+
+            answers = None
+            if row["answers_json"]:
+                answers_data = json.loads(row["answers_json"])
+                answers = [VisionLanguageAnswer(**a) for a in answers_data]
+
+            items.append(InferenceHistoryItem(
+                id=row["id"],
+                user_id=row["user_id"],
+                model_id=row["model_id"],
+                image_source=row["image_source"],
+                image_url=row["image_url"],
+                prompt=row["prompt"],
+                duration_ms=row["duration_ms"],
+                detections_count=row["detections_count"],
+                detections=detections,
+                answers=answers,
+                created_at=row["created_at"],
+            ))
+
+        return total, items
+    except Exception as exc:
+        logger.error("Failed to retrieve user history: %s", exc)
+        raise
+
+
 class ModelRegistry:
     """Registry for supported inference models and their runners."""
 
@@ -589,6 +772,9 @@ def register_default_models():
 
 register_default_models()
 
+# Initialize database on startup
+init_database()
+
 app = FastAPI(
     title="Model Inference Engine",
     description=(
@@ -652,6 +838,42 @@ async def get_models():
     return registry.list_models()
 
 
+@app.get("/history/{user_id}", response_model=InferenceHistoryResponse)
+async def get_history(
+    user_id: str,
+    page: int = 1,
+    page_size: int = 10
+):
+    """
+    Get inference history for a specific user with pagination.
+
+    Args:
+        user_id: User identifier
+        page: Page number (default: 1)
+        page_size: Number of items per page (default: 10, max: 100)
+
+    Returns:
+        Paginated inference history
+    """
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be >= 1")
+
+    if page_size < 1 or page_size > 100:
+        raise HTTPException(status_code=400, detail="Page size must be between 1 and 100")
+
+    try:
+        total, items = get_user_history(user_id, page, page_size)
+        return InferenceHistoryResponse(
+            total=total,
+            page=page,
+            page_size=page_size,
+            items=items
+        )
+    except Exception as exc:
+        logger.exception("Failed to retrieve history for user %s: %s", user_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to retrieve history") from exc
+
+
 @app.post("/inference", response_model=InferenceResponse)
 async def run_inference(payload: InferenceRequest):
     try:
@@ -705,6 +927,20 @@ async def run_inference(payload: InferenceRequest):
                         answer=answer_text,
                         confidence=1.0
                     ))
+
+    # Log to database
+    image_source = "base64" if payload.image_base64 else "url"
+    image_url_str = str(payload.image_url) if payload.image_url else None
+    log_inference_to_db(
+        user_id=payload.user_id,
+        model_id=payload.model_id,
+        image_source=image_source,
+        image_url=image_url_str,
+        prompt=payload.prompt,
+        duration_ms=round(duration_ms, 2),
+        detections=detections,
+        answers=answers,
+    )
 
     return InferenceResponse(
         model=card,

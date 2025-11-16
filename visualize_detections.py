@@ -20,7 +20,9 @@ def call_inference_api(model_id, image_url):
     """Call the inference API and return the response."""
     payload = {
         "model_id": model_id,
-        "image_url": image_url
+        "image_url": image_url,
+        "crop": "maize",
+        "task": "pest"
     }
     headers = {
         "Content-Type": "application/json"

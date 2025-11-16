@@ -194,32 +194,33 @@ class VisionLanguageRunner(BaseModelRunner):
         return {"answers": answers}
 
 
+# Static descriptions and remedies for each pest/disease
+PEST_INFO = {
+    "fall_army_worm": {
+        "description": "Fall Army Worm is a destructive pest that attacks maize crops. Larvae feed on leaves, creating characteristic ragged holes and windows in the foliage. The caterpillars have an inverted Y-shaped marking on their head capsule.",
+        "remedies": "Apply neem-based bio-pesticides or chemical insecticides like Emamectin Benzoate. Use pheromone traps for early detection. Practice crop rotation and intercropping with non-host plants. Remove and destroy infested plants."
+    },
+    "sheath_blight": {
+        "description": "Sheath Blight is a fungal disease affecting paddy crops caused by Rhizoctonia solani. It appears as oval or irregular greenish-gray lesions on leaf sheaths, which later turn brown with a dark brown border. Can cause significant yield loss.",
+        "remedies": "Use resistant varieties. Apply fungicides like Validamycin or Hexaconazole at early infection stages. Maintain proper plant spacing for air circulation. Avoid excessive nitrogen fertilization. Practice field sanitation by removing crop debris."
+    },
+    "brown_plant_hopper": {
+        "description": "Brown Plant Hopper (BPH) is a serious insect pest of rice that feeds on plant sap, causing hopperburn - yellowing and drying of plants. They are small brown insects typically found at the base of rice plants and can transmit viral diseases.",
+        "remedies": "Use resistant rice varieties. Apply neem oil or insecticides like Imidacloprid or Fipronil. Avoid excessive nitrogen application. Maintain proper water management. Use light traps for monitoring. Encourage natural predators like spiders and mirid bugs."
+    },
+    "pink_boll_worm": {
+        "description": "Pink Boll Worm is a major pest of cotton that attacks cotton bolls. Larvae bore into bolls causing damage to developing seeds and lint. Entry holes are visible on bolls, often with frass (insect waste). Severely affected bolls fail to open properly.",
+        "remedies": "Use pheromone traps for mass trapping and monitoring. Plant Bt cotton varieties. Apply chemical insecticides like Cypermethrin during flowering and boll formation. Practice clean cultivation by destroying crop residues. Follow recommended spacing and avoid late season irrigation."
+    },
+    "white_fly": {
+        "description": "White Fly is a tiny sap-sucking insect pest commonly found on cotton and other crops. Adults and nymphs feed on the underside of leaves, causing yellowing, leaf curling, and reduced plant vigor. They also secrete honeydew, leading to sooty mold growth.",
+        "remedies": "Use yellow sticky traps for monitoring and control. Apply neem-based products or chemical insecticides like Acetamiprid or Spiromesifen. Encourage natural predators like ladybird beetles and lacewings. Practice crop rotation. Remove heavily infested leaves. Maintain field sanitation."
+    }
+}
+
+
 class GeminiVLMRunner(BaseModelRunner):
     """Runs Gemini Vision Language Model for object detection with bounding boxes."""
-
-    # Static descriptions and remedies for each pest/disease
-    PEST_INFO = {
-        "fall_army_worm": {
-            "description": "Fall Army Worm is a destructive pest that attacks maize crops. Larvae feed on leaves, creating characteristic ragged holes and windows in the foliage. The caterpillars have an inverted Y-shaped marking on their head capsule.",
-            "remedies": "Apply neem-based bio-pesticides or chemical insecticides like Emamectin Benzoate. Use pheromone traps for early detection. Practice crop rotation and intercropping with non-host plants. Remove and destroy infested plants."
-        },
-        "sheath_blight": {
-            "description": "Sheath Blight is a fungal disease affecting paddy crops caused by Rhizoctonia solani. It appears as oval or irregular greenish-gray lesions on leaf sheaths, which later turn brown with a dark brown border. Can cause significant yield loss.",
-            "remedies": "Use resistant varieties. Apply fungicides like Validamycin or Hexaconazole at early infection stages. Maintain proper plant spacing for air circulation. Avoid excessive nitrogen fertilization. Practice field sanitation by removing crop debris."
-        },
-        "brown_plant_hopper": {
-            "description": "Brown Plant Hopper (BPH) is a serious insect pest of rice that feeds on plant sap, causing hopperburn - yellowing and drying of plants. They are small brown insects typically found at the base of rice plants and can transmit viral diseases.",
-            "remedies": "Use resistant rice varieties. Apply neem oil or insecticides like Imidacloprid or Fipronil. Avoid excessive nitrogen application. Maintain proper water management. Use light traps for monitoring. Encourage natural predators like spiders and mirid bugs."
-        },
-        "pink_boll_worm": {
-            "description": "Pink Boll Worm is a major pest of cotton that attacks cotton bolls. Larvae bore into bolls causing damage to developing seeds and lint. Entry holes are visible on bolls, often with frass (insect waste). Severely affected bolls fail to open properly.",
-            "remedies": "Use pheromone traps for mass trapping and monitoring. Plant Bt cotton varieties. Apply chemical insecticides like Cypermethrin during flowering and boll formation. Practice clean cultivation by destroying crop residues. Follow recommended spacing and avoid late season irrigation."
-        },
-        "white_fly": {
-            "description": "White Fly is a tiny sap-sucking insect pest commonly found on cotton and other crops. Adults and nymphs feed on the underside of leaves, causing yellowing, leaf curling, and reduced plant vigor. They also secrete honeydew, leading to sooty mold growth.",
-            "remedies": "Use yellow sticky traps for monitoring and control. Apply neem-based products or chemical insecticides like Acetamiprid or Spiromesifen. Encourage natural predators like ladybird beetles and lacewings. Practice crop rotation. Remove heavily infested leaves. Maintain field sanitation."
-        }
-    }
 
     # Pest and disease configuration by crop type
     PEST_CONFIGS = {
@@ -673,30 +674,37 @@ async def run_inference(payload: InferenceRequest):
 
     duration_ms = (time.perf_counter() - start) * 1000
 
-    # Add pest/disease information to answers if using Gemini VLM runner
+    # Add pest/disease information to answers for pest detection models
     answers = outputs.get("answers")
     detections = outputs.get("detections")
 
-    if isinstance(runner, GeminiVLMRunner) and detections:
+    # For both YOLO-based and Gemini-based pest detection models
+    if detections and (isinstance(runner, (GeminiVLMRunner, YoloRunner))):
         # Extract unique pest types from detections
         unique_pests = set()
         for detection in detections:
-            pest_base_name = runner._get_pest_base_name(detection.label)
-            unique_pests.add(pest_base_name)
+            # Get base pest name (strip position descriptors)
+            label = detection.label.lower()
+            # Check if this label matches any known pest
+            for pest_name in PEST_INFO.keys():
+                if label.startswith(pest_name) or pest_name in label:
+                    unique_pests.add(pest_name)
+                    break
 
         # Build answer with descriptions and remedies for detected pests
-        answers = []
-        for pest_name in sorted(unique_pests):
-            if pest_name in GeminiVLMRunner.PEST_INFO:
-                info = GeminiVLMRunner.PEST_INFO[pest_name]
-                answer_text = f"**{pest_name.replace('_', ' ').title()}**\n\n"
-                answer_text += f"Description: {info['description']}\n\n"
-                answer_text += f"Remedies: {info['remedies']}"
+        if unique_pests:
+            answers = []
+            for pest_name in sorted(unique_pests):
+                if pest_name in PEST_INFO:
+                    info = PEST_INFO[pest_name]
+                    answer_text = f"**{pest_name.replace('_', ' ').title()}**\n\n"
+                    answer_text += f"Description: {info['description']}\n\n"
+                    answer_text += f"Remedies: {info['remedies']}"
 
-                answers.append(VisionLanguageAnswer(
-                    answer=answer_text,
-                    confidence=1.0
-                ))
+                    answers.append(VisionLanguageAnswer(
+                        answer=answer_text,
+                        confidence=1.0
+                    ))
 
     return InferenceResponse(
         model=card,

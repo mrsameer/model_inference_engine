@@ -319,7 +319,7 @@ class GeminiVLMRunner(BaseModelRunner):
                         raise ValueError("GEMINI_API_KEY not found in .env file")
 
                     logger.info("Initializing Gemini client with model: %s", self.model_name)
-                    self._client = genai.Client(api_key=self.api_key, location="asia-south1", vertexai=True)
+                    self._client = genai.Client(api_key=self.api_key)
         return self._client
 
     def _build_system_instruction(self, crop_type: str) -> str:

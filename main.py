@@ -448,7 +448,7 @@ class GeminiVLMRunner(BaseModelRunner):
         # Configure the model with system instructions and structured output
         config = GenerateContentConfig(
             system_instruction=system_instruction,
-            temperature=0.3,
+            temperature=0,
             safety_settings=[
                 SafetySetting(
                     category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
@@ -1004,7 +1004,7 @@ def register_default_models():
         vlm_ss,
         lambda card=vlm_ss: GeminiVLMRunner(
             card=card,
-            model_name="gemini-2.5-flash",
+            model_name="gemini-2.5-pro",
             crop_type="all",
         ),
     )

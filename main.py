@@ -785,6 +785,33 @@ class ClipVLMRunner(BaseModelRunner):
 
             answers.append(VisionLanguageAnswer(answer=answer_text, confidence=0.9))
 
+        # Fallback: build answer from pest symptom analysis if no detailed analysis exists
+        if not answers and pest_symptom:
+            pest_name = pest_symptom.get("pest", "Unknown")
+            symptoms = pest_symptom.get("symptoms", "")
+            remedy = pest_symptom.get("remedy", "")
+            damage_severity = (
+                pest_symptom.get("damageSeverity")
+                or pest_symptom.get("severityLevel")
+                or "UNKNOWN"
+            )
+            pest_stage = pest_symptom.get("pestStage") or pest_symptom.get("stage") or "Unknown"
+            pest_harm_level = (
+                pest_symptom.get("pestHarmLevel")
+                or pest_symptom.get("damageLevel")
+                or "UNKNOWN"
+            )
+
+            answer_text = f"**{pest_name} (Symptom Analysis)**\n\n"
+            answer_text += f"**Stage:** {pest_stage}\n"
+            answer_text += f"**Damage Severity:** {damage_severity}\n"
+            answer_text += f"**Pest Harm Level:** {pest_harm_level}\n\n"
+            answer_text += f"**Symptoms:**\n{symptoms}\n\n"
+            if remedy:
+                answer_text += f"**Remedy:**\n{remedy}"
+
+            answers.append(VisionLanguageAnswer(answer=answer_text, confidence=0.85))
+
         logger.info("CLIP VLM detected %d pests/diseases", len(detections))
 
         return {"detections": detections, "answers": answers}

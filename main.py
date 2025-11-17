@@ -979,9 +979,9 @@ def register_default_models():
     # Gemini VLM Multi-Pest Detection Model
     vlm_ss = ModelCard(
         id="vlm_ss",
-        name="Gemini Multi-Pest Detector (VLM)",
+        name="Multi-Pest-Disease Detector (VLM) SS",
         description=(
-            "Gemini 2.5 Vision Language Model with native bounding box detection for agricultural pest identification. "
+            "Sameer Vision Language Model with native bounding box detection for agricultural pest identification. "
             "Supports Fall Army Worm (maize), Sheath Blight & Brown Plant Hopper (paddy), "
             "and Pink Boll Worm & White Fly (cotton). Zero-shot detection with flexible prompting. "
             "Specify crop type in prompt (e.g., 'maize', 'paddy', 'cotton', or 'all')."

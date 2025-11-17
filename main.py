@@ -6,11 +6,9 @@ import io
 import json
 import logging
 import os
-import tempfile
 import threading
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List
@@ -137,7 +135,9 @@ class BaseModelRunner:
     def __init__(self, card: ModelCard):
         self.card = card
 
-    async def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, Any]:
+    async def infer(
+        self, image: Image.Image, prompt: str | None, crop: str | None = None
+    ) -> Dict[str, Any]:
         raise NotImplementedError
 
 
@@ -164,7 +164,9 @@ class YoloRunner(BaseModelRunner):
                     self._model = YOLO(self.weights)
         return self._model
 
-    def _infer_sync(self, image: Image.Image, prompt: str | None) -> Dict[str, List[Detection]]:  # noqa: ARG002
+    def _infer_sync(
+        self, image: Image.Image, prompt: str | None
+    ) -> Dict[str, List[Detection]]:  # noqa: ARG002
         """Synchronous inference implementation."""
         model = self._ensure_model()
         results = model.predict(image, conf=self.conf_threshold, verbose=False)
@@ -184,7 +186,11 @@ class YoloRunner(BaseModelRunner):
             confidence = float(score)
             if confidence < self.conf_threshold:
                 continue
-            label = names.get(int(cls_idx), str(int(cls_idx))) if isinstance(names, dict) else names[int(cls_idx)]
+            label = (
+                names.get(int(cls_idx), str(int(cls_idx)))
+                if isinstance(names, dict)
+                else names[int(cls_idx)]
+            )
             detections.append(
                 Detection(
                     label=label,
@@ -199,7 +205,9 @@ class YoloRunner(BaseModelRunner):
             )
         return {"detections": detections}
 
-    async def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, List[Detection]]:
+    async def infer(
+        self, image: Image.Image, prompt: str | None
+    ) -> Dict[str, List[Detection]]:
         """Async inference wrapper."""
         return await asyncio.to_thread(self._infer_sync, image, prompt)
 
@@ -228,18 +236,24 @@ class VisionLanguageRunner(BaseModelRunner):
                     )
         return self._pipeline
 
-    def _infer_sync(self, image: Image.Image, prompt: str | None) -> Dict[str, List[VisionLanguageAnswer]]:
+    def _infer_sync(
+        self, image: Image.Image, prompt: str | None
+    ) -> Dict[str, List[VisionLanguageAnswer]]:
         """Synchronous inference implementation."""
         qa_pipeline = self._ensure_pipeline()
         question = prompt or "Describe the image"
         outputs = qa_pipeline(image=image, question=question, top_k=self.top_k)
         answers = [
-            VisionLanguageAnswer(answer=item["answer"], confidence=float(item.get("score", 0.0)))
+            VisionLanguageAnswer(
+                answer=item["answer"], confidence=float(item.get("score", 0.0))
+            )
             for item in outputs
         ]
         return {"answers": answers}
 
-    async def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, List[VisionLanguageAnswer]]:
+    async def infer(
+        self, image: Image.Image, prompt: str | None
+    ) -> Dict[str, List[VisionLanguageAnswer]]:
         """Async inference wrapper."""
         return await asyncio.to_thread(self._infer_sync, image, prompt)
 
@@ -248,28 +262,28 @@ class VisionLanguageRunner(BaseModelRunner):
 PEST_INFO = {
     "fall_army_worm": {
         "description": "Fall Army Worm is a destructive pest that attacks maize crops. Larvae feed on leaves, creating characteristic ragged holes and windows in the foliage. The caterpillars have an inverted Y-shaped marking on their head capsule.",
-        "remedies": "Apply neem-based bio-pesticides or chemical insecticides like Emamectin Benzoate. Use pheromone traps for early detection. Practice crop rotation and intercropping with non-host plants. Remove and destroy infested plants."
+        "remedies": "Apply neem-based bio-pesticides or chemical insecticides like Emamectin Benzoate. Use pheromone traps for early detection. Practice crop rotation and intercropping with non-host plants. Remove and destroy infested plants.",
     },
     "sheath_blight": {
         "description": "Sheath Blight is a fungal disease affecting paddy crops caused by Rhizoctonia solani. It appears as oval or irregular greenish-gray lesions on leaf sheaths, which later turn brown with a dark brown border. Can cause significant yield loss.",
-        "remedies": "Use resistant varieties. Apply fungicides like Validamycin or Hexaconazole at early infection stages. Maintain proper plant spacing for air circulation. Avoid excessive nitrogen fertilization. Practice field sanitation by removing crop debris."
+        "remedies": "Use resistant varieties. Apply fungicides like Validamycin or Hexaconazole at early infection stages. Maintain proper plant spacing for air circulation. Avoid excessive nitrogen fertilization. Practice field sanitation by removing crop debris.",
     },
     "brown_plant_hopper": {
         "description": "Brown Plant Hopper (BPH) is a serious insect pest of rice that feeds on plant sap, causing hopperburn - yellowing and drying of plants. They are small brown insects typically found at the base of rice plants and can transmit viral diseases.",
-        "remedies": "Use resistant rice varieties. Apply neem oil or insecticides like Imidacloprid or Fipronil. Avoid excessive nitrogen application. Maintain proper water management. Use light traps for monitoring. Encourage natural predators like spiders and mirid bugs."
+        "remedies": "Use resistant rice varieties. Apply neem oil or insecticides like Imidacloprid or Fipronil. Avoid excessive nitrogen application. Maintain proper water management. Use light traps for monitoring. Encourage natural predators like spiders and mirid bugs.",
     },
     "pink_boll_worm": {
         "description": "Pink Boll Worm is a major pest of cotton that attacks cotton bolls. Larvae bore into bolls causing damage to developing seeds and lint. Entry holes are visible on bolls, often with frass (insect waste). Severely affected bolls fail to open properly.",
-        "remedies": "Use pheromone traps for mass trapping and monitoring. Plant Bt cotton varieties. Apply chemical insecticides like Cypermethrin during flowering and boll formation. Practice clean cultivation by destroying crop residues. Follow recommended spacing and avoid late season irrigation."
+        "remedies": "Use pheromone traps for mass trapping and monitoring. Plant Bt cotton varieties. Apply chemical insecticides like Cypermethrin during flowering and boll formation. Practice clean cultivation by destroying crop residues. Follow recommended spacing and avoid late season irrigation.",
     },
     "white_fly": {
         "description": "White Fly is a tiny sap-sucking insect pest commonly found on cotton and other crops. Adults and nymphs feed on the underside of leaves, causing yellowing, leaf curling, and reduced plant vigor. They also secrete honeydew, leading to sooty mold growth.",
-        "remedies": "Use yellow sticky traps for monitoring and control. Apply neem-based products or chemical insecticides like Acetamiprid or Spiromesifen. Encourage natural predators like ladybird beetles and lacewings. Practice crop rotation. Remove heavily infested leaves. Maintain field sanitation."
+        "remedies": "Use yellow sticky traps for monitoring and control. Apply neem-based products or chemical insecticides like Acetamiprid or Spiromesifen. Encourage natural predators like ladybird beetles and lacewings. Practice crop rotation. Remove heavily infested leaves. Maintain field sanitation.",
     },
     "paddy_smut": {
         "description": "Paddy Smut is a fungal disease affecting rice crops caused by Tilletia barclayana. It appears as blackish powdery masses (spore balls) emerging from individual grains. Infected grains are replaced by smut balls containing dark spores. The disease reduces grain quality and yield.",
-        "remedies": "Use disease-free certified seeds. Treat seeds with fungicides like Carboxin or Thiram before sowing. Practice crop rotation with non-host crops. Remove and destroy infected plants to prevent spore spread. Maintain proper field sanitation and avoid waterlogged conditions."
-    }
+        "remedies": "Use disease-free certified seeds. Treat seeds with fungicides like Carboxin or Thiram before sowing. Practice crop rotation with non-host crops. Remove and destroy infected plants to prevent spore spread. Maintain proper field sanitation and avoid waterlogged conditions.",
+    },
 }
 
 
@@ -291,7 +305,7 @@ class GeminiVLMRunner(BaseModelRunner):
             "detection_details": {
                 "sheath_blight": "Sheath Blight - fungal disease with oval/irregular lesions on leaf sheaths",
                 "brown_plant_hopper": "Brown Plant Hopper (BPH) - small brown insects at base of rice plants",
-                "paddy_smut": "Paddy Smut - fungal disease with blackish powdery masses (spore balls) on grains"
+                "paddy_smut": "Paddy Smut - fungal disease with blackish powdery masses (spore balls) on grains",
             },
         },
         "cotton": {
@@ -299,11 +313,18 @@ class GeminiVLMRunner(BaseModelRunner):
             "description": "Pink Boll Worm and White Fly on cotton crops",
             "detection_details": {
                 "pink_boll_worm": "Pink Boll Worm - larvae or damage to cotton bolls with entry holes",
-                "white_fly": "White Fly - tiny white insects, usually on underside of leaves"
+                "white_fly": "White Fly - tiny white insects, usually on underside of leaves",
             },
         },
         "all": {
-            "pests": ["fall_army_worm", "sheath_blight", "brown_plant_hopper", "pink_boll_worm", "white_fly", "paddy_smut"],
+            "pests": [
+                "fall_army_worm",
+                "sheath_blight",
+                "brown_plant_hopper",
+                "pink_boll_worm",
+                "white_fly",
+                "paddy_smut",
+            ],
             "description": "All supported pests and diseases across maize, paddy, and cotton crops",
             "detection_details": {
                 "fall_army_worm": "Fall Army Worm larvae on maize",
@@ -311,12 +332,17 @@ class GeminiVLMRunner(BaseModelRunner):
                 "brown_plant_hopper": "Brown Plant Hopper on paddy",
                 "pink_boll_worm": "Pink Boll Worm on cotton",
                 "white_fly": "White Fly on cotton",
-                "paddy_smut": "Paddy Smut disease on paddy"
+                "paddy_smut": "Paddy Smut disease on paddy",
             },
-        }
+        },
     }
 
-    def __init__(self, card: ModelCard, model_name: str = "gemini-2.5-flash", crop_type: str = "all"):
+    def __init__(
+        self,
+        card: ModelCard,
+        model_name: str = "gemini-2.5-flash",
+        crop_type: str = "all",
+    ):
         super().__init__(card)
         self.model_name = model_name
         self.crop_type = crop_type
@@ -324,7 +350,9 @@ class GeminiVLMRunner(BaseModelRunner):
         self._lock = threading.Lock()
         self.api_key = os.getenv("GEMINI_API_KEY")
         if not self.api_key:
-            logger.warning("GEMINI_API_KEY not found in environment. Gemini VLM will not work.")
+            logger.warning(
+                "GEMINI_API_KEY not found in environment. Gemini VLM will not work."
+            )
 
     def _ensure_client(self):
         """Initialize Gemini client lazily."""
@@ -336,20 +364,29 @@ class GeminiVLMRunner(BaseModelRunner):
                     if not self.api_key:
                         raise ValueError("GEMINI_API_KEY not found in .env file")
 
-                    logger.info("Initializing Gemini client with model: %s", self.model_name)
+                    logger.info(
+                        "Initializing Gemini client with model: %s", self.model_name
+                    )
                     self._client = genai.Client(api_key=self.api_key)
         return self._client
 
-    def _build_system_instruction(self, crop_type: str) -> str:
+    def _build_system_instruction(
+        self, crop_type: str, user_crop_name: str | None = None
+    ) -> str:
         """Build system instruction for Gemini based on crop type."""
         config = self.PEST_CONFIGS[crop_type]
         pests_list = config["pests"]
         detection_details = config["detection_details"]
 
+        # Include user-provided crop name if available for better context
+        crop_context = f"{crop_type.upper()}"
+        if user_crop_name and user_crop_name.lower() != crop_type:
+            crop_context += f" (User specified: {user_crop_name})"
+
         instruction = f"""
         You are an expert agricultural entomologist and plant pathologist specialized in detecting pests and diseases.
 
-        CROP TYPE: {crop_type.upper()}
+        CROP TYPE: {crop_context}
         DESCRIPTION: {config["description"]}
 
         DETECTION TARGETS:
@@ -370,6 +407,7 @@ class GeminiVLMRunner(BaseModelRunner):
         - Only include detections with confidence > 0.5
         - Be especially careful to distinguish between different pest types
         - For diseases, detect visible symptoms like lesions, discoloration, or damage patterns
+        - Provide accurate bounding boxes that tightly fit the detected objects
         """
 
         return instruction
@@ -386,13 +424,12 @@ class GeminiVLMRunner(BaseModelRunner):
 
         # Convert image to bytes
         img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format='JPEG')
+        image.save(img_byte_arr, format="JPEG")
         img_byte_arr.seek(0)
 
         # Upload to Gemini Files API
         uploaded_file = client.files.upload(
-            file=img_byte_arr,
-            config=UploadFileConfig(mime_type='image/jpeg')
+            file=img_byte_arr, config=UploadFileConfig(mime_type="image/jpeg")
         )
         return uploaded_file.uri
 
@@ -408,7 +445,9 @@ class GeminiVLMRunner(BaseModelRunner):
 
         return label
 
-    def _infer_sync(self, image: Image.Image, prompt: str | None) -> Dict[str, List[Detection]]:  # noqa: ARG002
+    def _infer_sync(
+        self, image: Image.Image, prompt: str | None, crop: str | None = None
+    ) -> Dict[str, List[Detection]]:
         """Synchronous inference implementation for Gemini VLM."""
         from google.genai.types import (  # pylint: disable=import-error
             GenerateContentConfig,
@@ -419,13 +458,25 @@ class GeminiVLMRunner(BaseModelRunner):
         )
         from pydantic import BaseModel as PydanticBaseModel  # pylint: disable=import-error
 
-        # Determine crop type from prompt if provided
+        # Determine crop type from crop parameter, then prompt, then default
         crop_type = self.crop_type
-        if prompt:
+        user_crop_name = crop  # Store the original user-provided crop name
+
+        # First, check if crop parameter is provided
+        if crop:
+            crop_lower = crop.lower()
+            for crop_key in self.PEST_CONFIGS.keys():
+                if crop_key in crop_lower or crop_lower in crop_key:
+                    crop_type = crop_key
+                    logger.info("Using crop type from parameter: %s", crop_type)
+                    break
+
+        # If not found in crop parameter, check prompt
+        if crop_type == self.crop_type and prompt:
             prompt_lower = prompt.lower()
-            for crop in self.PEST_CONFIGS.keys():
-                if crop in prompt_lower:
-                    crop_type = crop
+            for crop_key in self.PEST_CONFIGS.keys():
+                if crop_key in prompt_lower:
+                    crop_type = crop_key
                     logger.info("Detected crop type from prompt: %s", crop_type)
                     break
 
@@ -448,13 +499,18 @@ class GeminiVLMRunner(BaseModelRunner):
         logger.info("Image uploaded. Size: %dx%d", width, height)
 
         # Build system instruction and prompt for the crop type
-        system_instruction = self._build_system_instruction(crop_type)
+        system_instruction = self._build_system_instruction(crop_type, user_crop_name)
         detection_prompt = self._build_detection_prompt(crop_type)
+
+        # Log the prompt and system instruction for debugging
+        logger.info("Gemini System Instruction:\n%s", system_instruction)
+        logger.info("Gemini Detection Prompt: %s", detection_prompt)
 
         # Configure the model with system instructions and structured output
         config = GenerateContentConfig(
             system_instruction=system_instruction,
             temperature=0,
+            thinking_budget=0,
             safety_settings=[
                 SafetySetting(
                     category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
@@ -466,7 +522,9 @@ class GeminiVLMRunner(BaseModelRunner):
         )
 
         # Generate content with structured output
-        logger.info("Running Gemini %s detection for crop: %s", self.model_name, crop_type)
+        logger.info(
+            "Running Gemini %s detection for crop: %s", self.model_name, crop_type
+        )
         response = client.models.generate_content(
             model=self.model_name,
             contents=[
@@ -508,9 +566,11 @@ class GeminiVLMRunner(BaseModelRunner):
         logger.info("Gemini detected %d pests/diseases", len(detections))
         return {"detections": detections}
 
-    async def infer(self, image: Image.Image, prompt: str | None) -> Dict[str, List[Detection]]:
+    async def infer(
+        self, image: Image.Image, prompt: str | None, crop: str | None = None
+    ) -> Dict[str, List[Detection]]:
         """Async inference wrapper."""
-        return await asyncio.to_thread(self._infer_sync, image, prompt)
+        return await asyncio.to_thread(self._infer_sync, image, prompt, crop)
 
 
 class ClipVLMRunner(BaseModelRunner):
@@ -551,13 +611,12 @@ class ClipVLMRunner(BaseModelRunner):
         payload = {
             "image_url": image_url,
             "task": task,
-            "optional_text": {
-                "user_id": user_id,
-                "crop": crop
-            }
+            "optional_text": {"user_id": user_id, "crop": crop},
         }
 
-        logger.info("Calling CLIP VLM API for user=%s, crop=%s, task=%s", user_id, crop, task)
+        logger.info(
+            "Calling CLIP VLM API for user=%s, crop=%s, task=%s", user_id, crop, task
+        )
         logger.info("CLIP VLM API Request - URL: %s", self.API_URL)
         logger.info("CLIP VLM API Request - Payload: %s", json.dumps(payload, indent=2))
 
@@ -567,20 +626,19 @@ class ClipVLMRunner(BaseModelRunner):
                 response = await client.post(
                     self.API_URL,
                     json=payload,
-                    headers={"Content-Type": "application/json"}
+                    headers={"Content-Type": "application/json"},
                 )
                 response.raise_for_status()
         except httpx.TimeoutException as exc:
             logger.error("CLIP VLM API timeout after %d seconds", self.TIMEOUT)
             raise HTTPException(
                 status_code=504,
-                detail=f"API request timed out after {self.TIMEOUT} seconds"
+                detail=f"API request timed out after {self.TIMEOUT} seconds",
             ) from exc
         except httpx.HTTPError as exc:
             logger.error("CLIP VLM API error: %s", exc)
             raise HTTPException(
-                status_code=502,
-                detail=f"External API error: {str(exc)}"
+                status_code=502, detail=f"External API error: {str(exc)}"
             ) from exc
 
         # Parse the response
@@ -589,18 +647,14 @@ class ClipVLMRunner(BaseModelRunner):
         except Exception as exc:
             logger.error("Failed to parse CLIP VLM API response: %s", exc)
             raise HTTPException(
-                status_code=502,
-                detail="Failed to parse API response"
+                status_code=502, detail="Failed to parse API response"
             ) from exc
 
         # Check response status
         if result.get("status") != "success":
             error_msg = result.get("message", "Unknown error")
             logger.error("CLIP VLM API returned error: %s", error_msg)
-            raise HTTPException(
-                status_code=502,
-                detail=f"API error: {error_msg}"
-            )
+            raise HTTPException(status_code=502, detail=f"API error: {error_msg}")
 
         # Extract detections from the response
         detections: List[Detection] = []
@@ -654,7 +708,9 @@ class ClipVLMRunner(BaseModelRunner):
 
         # Also process pest_symptom_analysis if needed
         pest_symptom = results_data.get("pest_symptom_analysis", {})
-        if pest_symptom and not pest_analysis and not disease_analysis:  # Only if no other analysis provided results
+        if (
+            pest_symptom and not pest_analysis and not disease_analysis
+        ):  # Only if no other analysis provided results
             pest_name = pest_symptom.get("pest", "Unknown")
             bboxes = pest_symptom.get("bbox", [])
 
@@ -692,10 +748,7 @@ class ClipVLMRunner(BaseModelRunner):
             answer_text += f"**Symptoms:**\n{symptoms}\n\n"
             answer_text += f"**Remedy:**\n{remedy}"
 
-            answers.append(VisionLanguageAnswer(
-                answer=answer_text,
-                confidence=0.9
-            ))
+            answers.append(VisionLanguageAnswer(answer=answer_text, confidence=0.9))
 
         # Handle disease analysis
         if disease_analysis:
@@ -711,17 +764,11 @@ class ClipVLMRunner(BaseModelRunner):
             answer_text += f"**Symptoms:**\n{symptoms}\n\n"
             answer_text += f"**Remedy:**\n{remedy}"
 
-            answers.append(VisionLanguageAnswer(
-                answer=answer_text,
-                confidence=0.9
-            ))
+            answers.append(VisionLanguageAnswer(answer=answer_text, confidence=0.9))
 
         logger.info("CLIP VLM detected %d pests/diseases", len(detections))
 
-        return {
-            "detections": detections,
-            "answers": answers
-        }
+        return {"detections": detections, "answers": answers}
 
 
 # Database configuration and initialization
@@ -789,38 +836,48 @@ async def log_inference_to_db(
     try:
         async with aiosqlite.connect(DB_PATH) as conn:
             detections_count = len(detections) if detections else 0
-            detections_json = json.dumps([d.model_dump() for d in detections]) if detections else None
-            answers_json = json.dumps([a.model_dump() for a in answers]) if answers else None
+            detections_json = (
+                json.dumps([d.model_dump() for d in detections]) if detections else None
+            )
+            answers_json = (
+                json.dumps([a.model_dump() for a in answers]) if answers else None
+            )
 
-            await conn.execute("""
+            await conn.execute(
+                """
                 INSERT INTO inference_logs
                 (user_id, model_id, crop, image_source, image_url, prompt, duration_ms,
                  detections_count, detections_json, answers_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                user_id,
-                model_id,
-                crop,
-                image_source,
-                image_url,
-                prompt,
-                duration_ms,
-                detections_count,
-                detections_json,
-                answers_json,
-            ))
+            """,
+                (
+                    user_id,
+                    model_id,
+                    crop,
+                    image_source,
+                    image_url,
+                    prompt,
+                    duration_ms,
+                    detections_count,
+                    detections_json,
+                    answers_json,
+                ),
+            )
 
             await conn.commit()
-        logger.info("Logged inference to database: user=%s, model=%s, crop=%s, detections=%d",
-                   user_id, model_id, crop, detections_count)
+        logger.info(
+            "Logged inference to database: user=%s, model=%s, crop=%s, detections=%d",
+            user_id,
+            model_id,
+            crop,
+            detections_count,
+        )
     except Exception as exc:
         logger.error("Failed to log inference to database: %s", exc)
 
 
 async def get_user_history(
-    user_id: str,
-    page: int = 1,
-    page_size: int = 10
+    user_id: str, page: int = 1, page_size: int = 10
 ) -> tuple[int, List[InferenceHistoryItem]]:
     """Retrieve inference history for a user with pagination."""
     try:
@@ -828,17 +885,21 @@ async def get_user_history(
             conn.row_factory = aiosqlite.Row
 
             # Get total count
-            async with conn.execute("""
+            async with conn.execute(
+                """
                 SELECT COUNT(*) as total
                 FROM inference_logs
                 WHERE user_id = ?
-            """, (user_id,)) as cursor:
+            """,
+                (user_id,),
+            ) as cursor:
                 row = await cursor.fetchone()
                 total = row["total"]
 
             # Get paginated results
             offset = (page - 1) * page_size
-            async with conn.execute("""
+            async with conn.execute(
+                """
                 SELECT id, user_id, model_id, crop, image_source, image_url, prompt,
                        duration_ms, detections_count, detections_json, answers_json,
                        created_at
@@ -846,7 +907,9 @@ async def get_user_history(
                 WHERE user_id = ?
                 ORDER BY created_at DESC
                 LIMIT ? OFFSET ?
-            """, (user_id, page_size, offset)) as cursor:
+            """,
+                (user_id, page_size, offset),
+            ) as cursor:
                 rows = await cursor.fetchall()
 
         items = []
@@ -861,20 +924,22 @@ async def get_user_history(
                 answers_data = json.loads(row["answers_json"])
                 answers = [VisionLanguageAnswer(**a) for a in answers_data]
 
-            items.append(InferenceHistoryItem(
-                id=row["id"],
-                user_id=row["user_id"],
-                model_id=row["model_id"],
-                crop=row["crop"],
-                image_source=row["image_source"],
-                image_url=row["image_url"],
-                prompt=row["prompt"],
-                duration_ms=row["duration_ms"],
-                detections_count=row["detections_count"],
-                detections=detections,
-                answers=answers,
-                created_at=row["created_at"],
-            ))
+            items.append(
+                InferenceHistoryItem(
+                    id=row["id"],
+                    user_id=row["user_id"],
+                    model_id=row["model_id"],
+                    crop=row["crop"],
+                    image_source=row["image_source"],
+                    image_url=row["image_url"],
+                    prompt=row["prompt"],
+                    duration_ms=row["duration_ms"],
+                    detections_count=row["detections_count"],
+                    detections=detections,
+                    answers=answers,
+                    created_at=row["created_at"],
+                )
+            )
 
         return total, items
     except Exception as exc:
@@ -932,7 +997,9 @@ def register_default_models():
         tags=["yolo", "object-detection", "real-time"],
         capabilities=["object-detection", "bounding-box"],
     )
-    registry.register(yolo_n, lambda card=yolo_n: YoloRunner(card=card, weights="yolov8n.pt"))
+    registry.register(
+        yolo_n, lambda card=yolo_n: YoloRunner(card=card, weights="yolov8n.pt")
+    )
 
     yolo_s = ModelCard(
         id="yolov8s",
@@ -943,7 +1010,9 @@ def register_default_models():
         tags=["yolo", "object-detection"],
         capabilities=["object-detection", "bounding-box"],
     )
-    registry.register(yolo_s, lambda card=yolo_s: YoloRunner(card=card, weights="yolov8s.pt"))
+    registry.register(
+        yolo_s, lambda card=yolo_s: YoloRunner(card=card, weights="yolov8s.pt")
+    )
 
     vlm = ModelCard(
         id="blip-vqa-base",
@@ -970,7 +1039,13 @@ def register_default_models():
         description="Fine-tuned YOLOv8 small model for detecting fall army worms on crop leaves. Optimized for agricultural pest detection with 40% mAP50 on validation data.",
         task=ModelTask.object_detection,
         framework="ultralytics",
-        tags=["pest-detection", "yolo", "fall-army-worm", "agriculture", "crop-monitoring"],
+        tags=[
+            "pest-detection",
+            "yolo",
+            "fall-army-worm",
+            "agriculture",
+            "crop-monitoring",
+        ],
         capabilities=["object-detection", "bounding-box", "pest-detection"],
     )
     registry.register(
@@ -994,7 +1069,14 @@ def register_default_models():
         ),
         task=ModelTask.object_detection,
         framework="gemini",
-        tags=["vlm", "vision-language", "pest-detection", "multi-crop", "zero-shot", "agriculture"],
+        tags=[
+            "vlm",
+            "vision-language",
+            "pest-detection",
+            "multi-crop",
+            "zero-shot",
+            "agriculture",
+        ],
         default_prompt="all",
         capabilities=[
             "object-detection",
@@ -1003,7 +1085,7 @@ def register_default_models():
             "disease-detection",
             "multi-crop",
             "zero-shot",
-            "flexible-prompting"
+            "flexible-prompting",
         ],
     )
     registry.register(
@@ -1028,7 +1110,14 @@ def register_default_models():
         ),
         task=ModelTask.object_detection,
         framework="clip",
-        tags=["vlm", "clip", "pest-detection", "disease-detection", "external-api", "comprehensive-analysis"],
+        tags=[
+            "vlm",
+            "clip",
+            "pest-detection",
+            "disease-detection",
+            "external-api",
+            "comprehensive-analysis",
+        ],
         default_prompt=None,
         capabilities=[
             "object-detection",
@@ -1039,7 +1128,7 @@ def register_default_models():
             "damage-assessment",
             "symptom-analysis",
             "remedy-recommendation",
-            "multi-crop"
+            "multi-crop",
         ],
     )
     registry.register(
@@ -1126,11 +1215,7 @@ async def get_models():
 
 
 @app.get("/history/{user_id}", response_model=InferenceHistoryResponse)
-async def get_history(
-    user_id: str,
-    page: int = 1,
-    page_size: int = 10
-):
+async def get_history(user_id: str, page: int = 1, page_size: int = 10):
     """
     Get inference history for a specific user with pagination.
 
@@ -1146,19 +1231,20 @@ async def get_history(
         raise HTTPException(status_code=400, detail="Page must be >= 1")
 
     if page_size < 1 or page_size > 100:
-        raise HTTPException(status_code=400, detail="Page size must be between 1 and 100")
+        raise HTTPException(
+            status_code=400, detail="Page size must be between 1 and 100"
+        )
 
     try:
         total, items = await get_user_history(user_id, page, page_size)
         return InferenceHistoryResponse(
-            total=total,
-            page=page,
-            page_size=page_size,
-            items=items
+            total=total, page=page, page_size=page_size, items=items
         )
     except Exception as exc:
         logger.exception("Failed to retrieve history for user %s: %s", user_id, exc)
-        raise HTTPException(status_code=500, detail="Failed to retrieve history") from exc
+        raise HTTPException(
+            status_code=500, detail="Failed to retrieve history"
+        ) from exc
 
 
 @app.post("/inference", response_model=InferenceResponse)
@@ -1182,12 +1268,15 @@ async def run_inference(payload: InferenceRequest):
                 "image_url": str(payload.image_url) if payload.image_url else None,
                 "user_id": payload.user_id or "unknown",
                 "crop": payload.crop or "unknown",
-                "task": payload.task or "pest"
+                "task": payload.task or "pest",
             }
             prompt = json.dumps(context)
             outputs = await runner.infer(image=image, prompt=prompt)
         else:
-            outputs = await runner.infer(image=image, prompt=payload.prompt)
+            # Pass crop parameter to all models (including vlm_ss)
+            outputs = await runner.infer(
+                image=image, prompt=payload.prompt, crop=payload.crop
+            )
     except Exception as exc:  # pragma: no cover - runtime safeguard
         logger.exception("Inference failed: %s", exc)
         raise HTTPException(status_code=500, detail="Inference failed") from exc
@@ -1221,10 +1310,9 @@ async def run_inference(payload: InferenceRequest):
                     answer_text += f"Description: {info['description']}\n\n"
                     answer_text += f"Remedies: {info['remedies']}"
 
-                    answers.append(VisionLanguageAnswer(
-                        answer=answer_text,
-                        confidence=1.0
-                    ))
+                    answers.append(
+                        VisionLanguageAnswer(answer=answer_text, confidence=1.0)
+                    )
 
     # Log to database
     image_source = "base64" if payload.image_base64 else "url"

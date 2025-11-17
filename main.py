@@ -1223,7 +1223,7 @@ async def root():
     }
 
 
-@app.get("/healthz")
+@app.get("/health")
 async def health():
     return {"status": "ok"}
 

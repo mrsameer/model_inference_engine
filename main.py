@@ -510,7 +510,7 @@ class GeminiVLMRunner(BaseModelRunner):
         config = GenerateContentConfig(
             system_instruction=system_instruction,
             temperature=0,
-            thinking_budget=0,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
             safety_settings=[
                 SafetySetting(
                     category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,

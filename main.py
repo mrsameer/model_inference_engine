@@ -1016,9 +1016,9 @@ def register_default_models():
         tags=["yolo", "object-detection", "real-time"],
         capabilities=["object-detection", "bounding-box"],
     )
-    registry.register(
-        yolo_n, lambda card=yolo_n: YoloRunner(card=card, weights="yolov8n.pt")
-    )
+    # registry.register(
+    #     yolo_n, lambda card=yolo_n: YoloRunner(card=card, weights="yolov8n.pt")
+    # )
 
     yolo_s = ModelCard(
         id="yolov8s",
@@ -1029,9 +1029,9 @@ def register_default_models():
         tags=["yolo", "object-detection"],
         capabilities=["object-detection", "bounding-box"],
     )
-    registry.register(
-        yolo_s, lambda card=yolo_s: YoloRunner(card=card, weights="yolov8s.pt")
-    )
+    # registry.register(
+    #     yolo_s, lambda card=yolo_s: YoloRunner(card=card, weights="yolov8s.pt")
+    # )
 
     vlm = ModelCard(
         id="blip-vqa-base",
@@ -1043,13 +1043,13 @@ def register_default_models():
         default_prompt="Describe the image",
         capabilities=["captioning", "visual-question-answering"],
     )
-    registry.register(
-        vlm,
-        lambda card=vlm: VisionLanguageRunner(
-            card=card,
-            model_name="Salesforce/blip-vqa-base",
-        ),
-    )
+    # registry.register(
+    #     vlm,
+    #     lambda card=vlm: VisionLanguageRunner(
+    #         card=card,
+    #         model_name="Salesforce/blip-vqa-base",
+    #     ),
+    # )
 
     # Fall Army Worm Detection Model
     pest_faw = ModelCard(

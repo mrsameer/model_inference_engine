@@ -288,6 +288,10 @@ PEST_INFO = {
         "description": "Rice Leaf Roller is a major insect pest of rice/paddy crops. The larvae fold or roll rice leaves lengthwise and feed inside, causing white transparent patches on leaves. Heavy infestations lead to reduced photosynthesis, stunted growth, and significant yield loss.",
         "remedies": "Use light traps for monitoring and mass trapping of adult moths. Apply neem-based bio-pesticides or chemical insecticides like Chlorpyrifos or Cartap Hydrochloride during early infestation. Encourage natural predators like spiders, dragonflies, and parasitic wasps. Practice proper water management and avoid excessive nitrogen fertilization. Remove damaged leaves to reduce further infestation.",
     },
+    "bacterial_leaf_blight": {
+        "description": "Bacterial Leaf Blight (BLB) is a serious bacterial disease of rice caused by Xanthomonas oryzae. It appears as water-soaked lesions on leaf tips and edges that turn yellow and then grayish-white as they dry. The disease can cause severe yield losses, especially in tropical and subtropical regions during warm, humid conditions.",
+        "remedies": "Use resistant rice varieties. Apply copper-based bactericides like Copper Oxychloride during early disease stages. Practice crop rotation and use disease-free certified seeds. Maintain balanced fertilization, avoiding excessive nitrogen. Improve field drainage and avoid overhead irrigation. Remove and destroy infected plant debris. Apply recommended doses of potassium to increase plant resistance.",
+    },
 }
 
 
@@ -309,13 +313,15 @@ class GeminiVLMRunner(BaseModelRunner):
                 "brown_plant_hopper",
                 "paddy_smut",
                 "rice_leaf_roller",
+                "bacterial_leaf_blight",
             ],
-            "description": "Sheath Blight disease, Brown Plant Hopper (BPH), Paddy Smut, and Rice Leaf Roller on paddy/rice crops",
+            "description": "Sheath Blight disease, Brown Plant Hopper (BPH), Paddy Smut, Rice Leaf Roller, and Bacterial Leaf Blight on paddy/rice crops",
             "detection_details": {
                 "sheath_blight": "Sheath Blight - fungal disease with oval/irregular lesions on leaf sheaths",
                 "brown_plant_hopper": "Brown Plant Hopper (BPH) - small brown insects at base of rice plants",
                 "paddy_smut": "Paddy Smut - fungal disease with blackish powdery masses (spore balls) on grains",
                 "rice_leaf_roller": "Rice Leaf Roller - larvae that fold or roll rice leaves lengthwise, causing white transparent patches",
+                "bacterial_leaf_blight": "Bacterial Leaf Blight - water-soaked lesions on leaf tips/edges turning yellow then grayish-white",
             },
         },
         "cotton": {
@@ -335,6 +341,7 @@ class GeminiVLMRunner(BaseModelRunner):
                 "white_fly",
                 "paddy_smut",
                 "rice_leaf_roller",
+                "bacterial_leaf_blight",
             ],
             "description": "All supported pests and diseases across maize, paddy, and cotton crops",
             "detection_details": {
@@ -345,6 +352,7 @@ class GeminiVLMRunner(BaseModelRunner):
                 "white_fly": "White Fly on cotton",
                 "paddy_smut": "Paddy Smut disease on paddy",
                 "rice_leaf_roller": "Rice Leaf Roller on paddy",
+                "bacterial_leaf_blight": "Bacterial Leaf Blight on paddy",
             },
         },
     }
@@ -467,7 +475,6 @@ class GeminiVLMRunner(BaseModelRunner):
             HarmCategory,
             Part,
             SafetySetting,
-            ThinkingConfig,
         )
         from pydantic import BaseModel as PydanticBaseModel  # pylint: disable=import-error
 

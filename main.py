@@ -284,6 +284,10 @@ PEST_INFO = {
         "description": "Paddy Smut is a fungal disease affecting rice crops caused by Tilletia barclayana. It appears as blackish powdery masses (spore balls) emerging from individual grains. Infected grains are replaced by smut balls containing dark spores. The disease reduces grain quality and yield.",
         "remedies": "Use disease-free certified seeds. Treat seeds with fungicides like Carboxin or Thiram before sowing. Practice crop rotation with non-host crops. Remove and destroy infected plants to prevent spore spread. Maintain proper field sanitation and avoid waterlogged conditions.",
     },
+    "rice_leaf_roller": {
+        "description": "Rice Leaf Roller is a major insect pest of rice/paddy crops. The larvae fold or roll rice leaves lengthwise and feed inside, causing white transparent patches on leaves. Heavy infestations lead to reduced photosynthesis, stunted growth, and significant yield loss.",
+        "remedies": "Use light traps for monitoring and mass trapping of adult moths. Apply neem-based bio-pesticides or chemical insecticides like Chlorpyrifos or Cartap Hydrochloride during early infestation. Encourage natural predators like spiders, dragonflies, and parasitic wasps. Practice proper water management and avoid excessive nitrogen fertilization. Remove damaged leaves to reduce further infestation.",
+    },
 }
 
 
@@ -300,12 +304,18 @@ class GeminiVLMRunner(BaseModelRunner):
             },
         },
         "paddy": {
-            "pests": ["sheath_blight", "brown_plant_hopper", "paddy_smut"],
-            "description": "Sheath Blight disease, Brown Plant Hopper (BPH), and Paddy Smut on paddy/rice crops",
+            "pests": [
+                "sheath_blight",
+                "brown_plant_hopper",
+                "paddy_smut",
+                "rice_leaf_roller",
+            ],
+            "description": "Sheath Blight disease, Brown Plant Hopper (BPH), Paddy Smut, and Rice Leaf Roller on paddy/rice crops",
             "detection_details": {
                 "sheath_blight": "Sheath Blight - fungal disease with oval/irregular lesions on leaf sheaths",
                 "brown_plant_hopper": "Brown Plant Hopper (BPH) - small brown insects at base of rice plants",
                 "paddy_smut": "Paddy Smut - fungal disease with blackish powdery masses (spore balls) on grains",
+                "rice_leaf_roller": "Rice Leaf Roller - larvae that fold or roll rice leaves lengthwise, causing white transparent patches",
             },
         },
         "cotton": {
@@ -324,6 +334,7 @@ class GeminiVLMRunner(BaseModelRunner):
                 "pink_boll_worm",
                 "white_fly",
                 "paddy_smut",
+                "rice_leaf_roller",
             ],
             "description": "All supported pests and diseases across maize, paddy, and cotton crops",
             "detection_details": {
@@ -333,6 +344,7 @@ class GeminiVLMRunner(BaseModelRunner):
                 "pink_boll_worm": "Pink Boll Worm on cotton",
                 "white_fly": "White Fly on cotton",
                 "paddy_smut": "Paddy Smut disease on paddy",
+                "rice_leaf_roller": "Rice Leaf Roller on paddy",
             },
         },
     }
@@ -455,6 +467,7 @@ class GeminiVLMRunner(BaseModelRunner):
             HarmCategory,
             Part,
             SafetySetting,
+            ThinkingConfig,
         )
         from pydantic import BaseModel as PydanticBaseModel  # pylint: disable=import-error
 
@@ -510,7 +523,7 @@ class GeminiVLMRunner(BaseModelRunner):
         config = GenerateContentConfig(
             system_instruction=system_instruction,
             temperature=0,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            thinking_config=ThinkingConfig(thinking_budget=0),
             safety_settings=[
                 SafetySetting(
                     category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,

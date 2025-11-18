@@ -252,7 +252,7 @@ class VisionLanguageRunner(BaseModelRunner):
         return {"answers": answers}
 
     async def infer(
-        self, image: Image.Image, prompt: str | None
+        self, image: Image.Image, prompt: str | None, crop: str | None = None
     ) -> Dict[str, List[VisionLanguageAnswer]]:
         """Async inference wrapper."""
         return await asyncio.to_thread(self._infer_sync, image, prompt)

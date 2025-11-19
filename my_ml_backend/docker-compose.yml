@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  gemini-vlm-backend:
+    build: .
+    container_name: gemini-vlm-ls-backend
+    ports:
+      - "9099:9099"
+    environment:
+      - ML_BACKEND_PORT=9099
+      - ML_BACKEND_HOST=0.0.0.0
+      - INFERENCE_API_URL=https://aspire.ap.gov.in/inference/inference
+      #- INFERENCE_API_URL=http://model-inference-api:5000/inference
+      #- INFERENCE_API_URL=https://aspire.ap.gov.in/inference/inference
+      #- INFERENCE_API_URL=http://localhost:5000/inference
+
+
+    restart: unless-stopped
+    networks:
+      - labelstudio-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9099/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+networks:
+  labelstudio-net:
+    external: true
+
+
+
+
+
+
+
+
+

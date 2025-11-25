@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -592,6 +593,230 @@ class GeminiVLMRunner(BaseModelRunner):
         return await asyncio.to_thread(self._infer_sync, image, prompt, crop)
 
 
+class Qwen3VLMRunner(BaseModelRunner):
+    """Runs Qwen3 VLM via Ollama API for pest detection."""
+
+    API_URL = "http://acerkrishidss.vassarlabs.com/ollama/api/generate"
+    MODEL_NAME = "qwen3-vl:8b"
+    TIMEOUT = 300
+
+    def __init__(
+        self,
+        card: ModelCard,
+        model_name: str = MODEL_NAME,
+        crop_type: str = "all",
+    ):
+        super().__init__(card)
+        self.model_name = model_name
+        self.crop_type = crop_type
+
+    def _select_crop_type(self, crop: str | None, prompt: str | None) -> tuple[str, str | None]:
+        crop_type = self.crop_type
+        user_crop_name = crop
+
+        if crop:
+            crop_lower = crop.lower()
+            for crop_key in GeminiVLMRunner.PEST_CONFIGS.keys():
+                if crop_key in crop_lower or crop_lower in crop_key:
+                    crop_type = crop_key
+                    break
+
+        if crop_type == self.crop_type and prompt:
+            prompt_lower = prompt.lower()
+            for crop_key in GeminiVLMRunner.PEST_CONFIGS.keys():
+                if crop_key in prompt_lower:
+                    crop_type = crop_key
+                    break
+
+        if crop_type not in GeminiVLMRunner.PEST_CONFIGS:
+            logger.warning("Invalid crop type '%s', defaulting to 'all'", crop_type)
+            crop_type = "all"
+        return crop_type, user_crop_name
+
+    def _build_prompt(self, crop_type: str, user_crop_name: str | None = None) -> str:
+        config = GeminiVLMRunner.PEST_CONFIGS[crop_type]
+        pests_details = "\n".join(
+            f"- {pest}: {config['detection_details'][pest]}" for pest in config["pests"]
+        )
+        crop_context = crop_type.upper()
+        if user_crop_name and user_crop_name.lower() != crop_type:
+            crop_context += f" (User specified: {user_crop_name})"
+
+        return f"""
+You are an expert agricultural entomologist and plant pathologist specialized in detecting pests and diseases on crops.
+
+CROP CONTEXT: {crop_context}
+FOCUS: {config["description"]}
+TARGET LIST:
+{pests_details}
+
+INSTRUCTIONS:
+- Return ONLY valid JSON. Do not include markdown fences or explanatory text.
+- Use snake_case labels taken from the target list above (max 25 detections).
+- Provide pixel bounding boxes relative to the input image (origin at top-left).
+- Coordinates must be integers: x_min, y_min, x_max, y_max.
+- Confidence must be a float between 0 and 1.
+- If nothing is detected, return an empty detections array.
+
+JSON SCHEMA:
+{{
+  "detections": [
+    {{
+      "label": "fall_army_worm",
+      "confidence": 0.92,
+      "box": {{"x_min": 10, "y_min": 15, "x_max": 120, "y_max": 180}}
+    }}
+  ],
+  "analysis": {{
+    "summary": "Short natural language summary of the findings.",
+    "remedy": "Actionable mitigation steps if pests/diseases are detected."
+  }}
+}}""".strip()
+
+    @staticmethod
+    def _encode_image(image: Image.Image) -> str:
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG")
+        buffer.seek(0)
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+    @staticmethod
+    def _extract_bbox(entry: Dict[str, Any]) -> tuple[float, float, float, float] | None:
+        box = entry.get("box") or entry.get("bbox")
+        if isinstance(box, dict):
+            x_min = box.get("x_min") or box.get("xmin")
+            y_min = box.get("y_min") or box.get("ymin")
+            x_max = box.get("x_max") or box.get("xmax")
+            y_max = box.get("y_max") or box.get("ymax")
+        elif isinstance(box, list) and len(box) == 4:
+            x_min, y_min, x_max, y_max = box
+        else:
+            return None
+
+        coords = [x_min, y_min, x_max, y_max]
+        if any(val is None for val in coords):
+            return None
+        try:
+            return tuple(float(val) for val in coords)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_llm_json(text: str) -> Dict[str, Any]:
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return {}
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+            if fence_match:
+                snippet = fence_match.group(1)
+                return json.loads(snippet)
+            brace_match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if brace_match:
+                snippet = brace_match.group(0)
+                return json.loads(snippet)
+            raise
+
+    async def infer(
+        self, image: Image.Image, prompt: str | None, crop: str | None = None
+    ) -> Dict[str, Any]:
+        crop_type, user_crop = self._select_crop_type(crop, prompt)
+        detection_prompt = self._build_prompt(crop_type, user_crop)
+        payload = {
+            "model": self.model_name,
+            "prompt": detection_prompt,
+            "stream": False,
+            "images": [self._encode_image(image)],
+        }
+
+        logger.info("Calling Qwen3 VLM via Ollama for crop: %s", crop_type)
+        try:
+            async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
+                response = await client.post(
+                    self.API_URL,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+                response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            logger.error("Qwen3 VLM API timeout after %d seconds", self.TIMEOUT)
+            raise HTTPException(
+                status_code=504,
+                detail=f"Qwen3 VLM request timed out after {self.TIMEOUT} seconds",
+            ) from exc
+        except httpx.HTTPError as exc:
+            logger.error("Qwen3 VLM API error: %s", exc)
+            raise HTTPException(
+                status_code=502, detail=f"Ollama API error: {str(exc)}"
+            ) from exc
+
+        try:
+            raw_result = response.json()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.error("Failed to parse Qwen3 VLM HTTP response: %s", exc)
+            raise HTTPException(status_code=502, detail="Invalid Ollama API response") from exc
+
+        llm_output = raw_result.get("response") or raw_result.get("message") or ""
+        try:
+            parsed = self._parse_llm_json(llm_output)
+        except Exception as exc:
+            logger.error("Qwen3 VLM returned non-JSON payload: %s", exc)
+            raise HTTPException(status_code=502, detail="Qwen3 response is not valid JSON") from exc
+
+        detections: List[Detection] = []
+        answers: List[VisionLanguageAnswer] = []
+
+        for entry in parsed.get("detections", []) or parsed.get("objects", []):
+            coords = self._extract_bbox(entry)
+            if not coords:
+                continue
+            label = entry.get("label") or entry.get("pest") or "unknown"
+            confidence = entry.get("confidence", 0.85)
+            try:
+                confidence_val = float(confidence)
+            except (TypeError, ValueError):
+                confidence_val = 0.85
+
+            detections.append(
+                Detection(
+                    label=str(label),
+                    confidence=max(0.0, min(1.0, confidence_val)),
+                    box=BoundingBox(
+                        x_min=coords[0],
+                        y_min=coords[1],
+                        x_max=coords[2],
+                        y_max=coords[3],
+                    ),
+                )
+            )
+
+        analysis = parsed.get("analysis") or {}
+        summary = ""
+        remedy = ""
+        confidence = 0.85
+        if isinstance(analysis, dict):
+            summary = analysis.get("summary") or analysis.get("description") or ""
+            remedy = analysis.get("remedy") or analysis.get("recommendations") or ""
+            try:
+                confidence = float(analysis.get("confidence", confidence))
+            except (TypeError, ValueError):
+                confidence = 0.85
+
+        if summary or remedy:
+            text = ""
+            if summary:
+                text += summary.strip()
+            if remedy:
+                if text:
+                    text += "\n\n"
+                text += f"**Remedy:**\n{remedy.strip()}"
+            answers.append(VisionLanguageAnswer(answer=text, confidence=confidence))
+
+        return {"detections": detections, "answers": answers}
+
+
 class ClipVLMRunner(BaseModelRunner):
     """Runs CLIP VLM for pest detection via external API."""
 
@@ -1139,6 +1364,41 @@ def register_default_models():
         lambda card=vlm_ss: GeminiVLMRunner(
             card=card,
             model_name="gemini-2.5-pro",
+            crop_type="all",
+        ),
+    )
+
+    # Qwen3 VLM via Ollama
+    qwen3 = ModelCard(
+        id="qwen3",
+        name="Qwen3 VLM Pest Detector (Ollama)",
+        description=(
+            "Qwen3-VL 8B model served via Ollama for pest and disease detection. "
+            "Accepts base64 encoded images and returns bounding boxes plus analysis JSON."
+        ),
+        task=ModelTask.object_detection,
+        framework="ollama",
+        tags=[
+            "vlm",
+            "qwen",
+            "ollama",
+            "pest-detection",
+            "disease-detection",
+        ],
+        default_prompt=None,
+        capabilities=[
+            "object-detection",
+            "bounding-box",
+            "pest-detection",
+            "disease-detection",
+            "vision-language",
+        ],
+    )
+    registry.register(
+        qwen3,
+        lambda card=qwen3: Qwen3VLMRunner(
+            card=card,
+            model_name="qwen3-vl:8b",
             crop_type="all",
         ),
     )

@@ -1576,14 +1576,14 @@ def register_default_models():
             "vision-language",
         ],
     )
-    registry.register(
-        qwen3,
-        lambda card=qwen3: Qwen3VLMRunner(
-            card=card,
-            model_name="qwen3-vl:8b",
-            crop_type="all",
-        ),
-    )
+    # registry.register(
+    #     qwen3,
+    #     lambda card=qwen3: Qwen3VLMRunner(
+    #         card=card,
+    #         model_name="qwen3-vl:8b",
+    #         crop_type="all",
+    #     ),
+    # )
 
     # Qwen2.5 VLM via vLLM
     qwen25_vllm = ModelCard(

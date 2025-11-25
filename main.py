@@ -937,6 +937,8 @@ class Qwen25VLLMRunner(Qwen3VLMRunner):
         logger.info(
             "Calling Qwen2.5 VLLM via vLLM API for crop: %s", crop_type
         )
+        logger.info("Qwen2.5 VLLM - Image URL: %s", image_url)
+        logger.info("Qwen2.5 VLLM - Prompt being sent: %s", combined_prompt)
         try:
             async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
                 response = await client.post(
@@ -959,6 +961,7 @@ class Qwen25VLLMRunner(Qwen3VLMRunner):
 
         try:
             result = response.json()
+            logger.info("Qwen2.5 VLLM - Raw API response: %s", result)
         except Exception as exc:
             logger.error("Failed to parse Qwen2.5 VLLM response: %s", exc)
             raise HTTPException(
@@ -980,6 +983,8 @@ class Qwen25VLLMRunner(Qwen3VLMRunner):
         if not text_content:
             logger.warning("Qwen2.5 VLLM response contained no text content")
             text_content = str(choices[0])
+
+        logger.info("Qwen2.5 VLLM - Extracted text content: %s", text_content)
 
         try:
             parsed = self._parse_llm_json(text_content)

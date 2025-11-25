@@ -817,6 +817,188 @@ JSON SCHEMA:
         return {"detections": detections, "answers": answers}
 
 
+class Qwen25VLLMRunner(Qwen3VLMRunner):
+    """Runs Qwen2.5-VL via vLLM API using direct image URLs."""
+
+    API_URL = "http://acerkrishidss.vassarlabs.com/vllm/v1/chat/completions"
+    MODEL_NAME = "Qwen/Qwen2.5-VL-7B-Instruct"
+    TIMEOUT = 300
+
+    def __init__(
+        self,
+        card: ModelCard,
+        model_name: str = MODEL_NAME,
+        crop_type: str = "all",
+    ):
+        super().__init__(card=card, model_name=model_name, crop_type=crop_type)
+
+    @staticmethod
+    def _extract_text_content(choice: Dict[str, Any]) -> str:
+        message = choice.get("message") or {}
+        content = message.get("content")
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text_val = item.get("text")
+                    if text_val:
+                        parts.append(str(text_val))
+            return "\n".join(parts).strip()
+        if isinstance(content, str):
+            return content.strip()
+        return ""
+
+    def _build_detections_and_answers(self, parsed: Dict[str, Any]) -> Dict[str, Any]:
+        detections: List[Detection] = []
+        answers: List[VisionLanguageAnswer] = []
+
+        for entry in parsed.get("detections", []) or parsed.get("objects", []):
+            coords = self._extract_bbox(entry)
+            if not coords:
+                continue
+            label = entry.get("label") or entry.get("pest") or "unknown"
+            confidence = entry.get("confidence", 0.85)
+            try:
+                confidence_val = float(confidence)
+            except (TypeError, ValueError):
+                confidence_val = 0.85
+
+            detections.append(
+                Detection(
+                    label=str(label),
+                    confidence=max(0.0, min(1.0, confidence_val)),
+                    box=BoundingBox(
+                        x_min=coords[0],
+                        y_min=coords[1],
+                        x_max=coords[2],
+                        y_max=coords[3],
+                    ),
+                )
+            )
+
+        analysis = parsed.get("analysis") or {}
+        summary = ""
+        remedy = ""
+        confidence = 0.85
+        if isinstance(analysis, dict):
+            summary = analysis.get("summary") or analysis.get("description") or ""
+            remedy = analysis.get("remedy") or analysis.get("recommendations") or ""
+            try:
+                confidence = float(analysis.get("confidence", confidence))
+            except (TypeError, ValueError):
+                confidence = 0.85
+
+        if summary or remedy:
+            text = ""
+            if summary:
+                text += summary.strip()
+            if remedy:
+                if text:
+                    text += "\n\n"
+                text += f"**Remedy:**\n{remedy.strip()}"
+            answers.append(VisionLanguageAnswer(answer=text, confidence=confidence))
+
+        return {"detections": detections, "answers": answers}
+
+    async def infer(
+        self,
+        image: Image.Image | None,  # noqa: ARG002
+        prompt: str | None,
+        crop: str | None = None,
+        image_url: str | None = None,
+    ) -> Dict[str, Any]:
+        crop_type, user_crop = self._select_crop_type(crop, prompt)
+        detection_prompt = self._build_prompt(crop_type, user_crop)
+        user_prompt = prompt or "What is in this image?"
+        combined_prompt = f"{detection_prompt}\n\nUSER QUESTION: {user_prompt}"
+
+        if not image_url:
+            raise HTTPException(
+                status_code=400,
+                detail="image_url is required for qwen-2.5-vl model",
+            )
+
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": combined_prompt},
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                    ],
+                }
+            ],
+            "temperature": 0,
+            "stream": False,
+            "max_tokens": 1024,
+        }
+
+        logger.info(
+            "Calling Qwen2.5 VLLM via vLLM API for crop: %s", crop_type
+        )
+        try:
+            async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
+                response = await client.post(
+                    self.API_URL,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+                response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            logger.error("Qwen2.5 VLLM API timeout after %d seconds", self.TIMEOUT)
+            raise HTTPException(
+                status_code=504,
+                detail=f"Qwen2.5 VLLM request timed out after {self.TIMEOUT} seconds",
+            ) from exc
+        except httpx.HTTPError as exc:
+            logger.error("Qwen2.5 VLLM API error: %s", exc)
+            raise HTTPException(
+                status_code=502, detail=f"vLLM API error: {str(exc)}"
+            ) from exc
+
+        try:
+            result = response.json()
+        except Exception as exc:
+            logger.error("Failed to parse Qwen2.5 VLLM response: %s", exc)
+            raise HTTPException(
+                status_code=502, detail="Invalid vLLM API response"
+            ) from exc
+
+        if result.get("error"):
+            logger.error("Qwen2.5 VLLM API returned error: %s", result["error"])
+            raise HTTPException(status_code=502, detail=str(result["error"]))
+
+        choices = result.get("choices") or []
+        if not choices:
+            logger.error("Qwen2.5 VLLM response missing choices")
+            raise HTTPException(
+                status_code=502, detail="Empty response from Qwen2.5 VLLM"
+            )
+
+        text_content = self._extract_text_content(choices[0])
+        if not text_content:
+            logger.warning("Qwen2.5 VLLM response contained no text content")
+            text_content = str(choices[0])
+
+        try:
+            parsed = self._parse_llm_json(text_content)
+            return self._build_detections_and_answers(parsed)
+        except Exception as exc:
+            logger.warning(
+                "Qwen2.5 VLLM returned non-JSON payload, falling back to text answer: %s",
+                exc,
+            )
+            return {
+                "detections": [],
+                "answers": [
+                    VisionLanguageAnswer(
+                        answer=text_content.strip(), confidence=0.5
+                    )
+                ],
+            }
+
+
 class ClipVLMRunner(BaseModelRunner):
     """Runs CLIP VLM for pest detection via external API."""
 
@@ -1403,6 +1585,41 @@ def register_default_models():
         ),
     )
 
+    # Qwen2.5 VLM via vLLM
+    qwen25_vllm = ModelCard(
+        id="qwen25_vllm",
+        name="Qwen2.5 VLM Pest Detector (vLLM)",
+        description=(
+            "Qwen2.5-VL 7B Instruct served via vLLM HTTP API. "
+            "Accepts image URLs directly (no decoding) and returns bounding boxes plus analysis JSON."
+        ),
+        task=ModelTask.object_detection,
+        framework="vllm",
+        tags=[
+            "vlm",
+            "qwen",
+            "vllm",
+            "pest-detection",
+            "disease-detection",
+        ],
+        default_prompt=None,
+        capabilities=[
+            "object-detection",
+            "bounding-box",
+            "pest-detection",
+            "disease-detection",
+            "vision-language",
+        ],
+    )
+    registry.register(
+        qwen25_vllm,
+        lambda card=qwen25_vllm: Qwen25VLLMRunner(
+            card=card,
+            model_name="Qwen/Qwen2.5-VL-7B-Instruct",
+            crop_type="all",
+        ),
+    )
+
     # CLIP VLM External API Model
     clip_vlm = ModelCard(
         id="clip_vlm",
@@ -1562,7 +1779,10 @@ async def run_inference(payload: InferenceRequest):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     try:
-        image = await _load_image(payload)
+        if payload.model_id == "qwen25_vllm":
+            image = None  # vLLM path consumes the URL directly
+        else:
+            image = await _load_image(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1578,6 +1798,13 @@ async def run_inference(payload: InferenceRequest):
             }
             prompt = json.dumps(context)
             outputs = await runner.infer(image=image, prompt=prompt)
+        elif payload.model_id == "qwen25_vllm":
+            outputs = await runner.infer(
+                image=image,
+                prompt=payload.prompt,
+                crop=payload.crop,
+                image_url=str(payload.image_url) if payload.image_url else None,
+            )
         else:
             # Pass crop parameter to all models (including vlm_ss)
             outputs = await runner.infer(

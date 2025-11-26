@@ -598,7 +598,7 @@ class Qwen3VLMRunner(BaseModelRunner):
 
     API_URL = "http://acerkrishidss.vassarlabs.com/ollama/api/generate"
     MODEL_NAME = "qwen3-vl:8b"
-    TIMEOUT = 300
+    TIMEOUT = 1200
 
     def __init__(
         self,
@@ -643,35 +643,36 @@ class Qwen3VLMRunner(BaseModelRunner):
             crop_context += f" (User specified: {user_crop_name})"
 
         return f"""
-You are an expert agricultural entomologist and plant pathologist specialized in detecting pests and diseases on crops.
+                  You are an expert agricultural entomologist. Analyze this image for Fall Army Worm on {crop_context} crops.
 
-CROP CONTEXT: {crop_context}
-FOCUS: {config["description"]}
-TARGET LIST:
-{pests_details}
+                  Return ONLY valid JSON with this exact structure:
 
-INSTRUCTIONS:
-- Return ONLY valid JSON. Do not include markdown fences or explanatory text.
-- Use snake_case labels taken from the target list above (max 25 detections).
-- Provide pixel bounding boxes relative to the input image (origin at top-left).
-- Coordinates must be integers: x_min, y_min, x_max, y_max.
-- Confidence must be a float between 0 and 1.
-- If nothing is detected, return an empty detections array.
+                  {{
+                   "detections": [
+                      {{
+                         "label": "fall_army_worm",
+                         "confidence": 0.0,
+                         "box": {{
+                            "x_min": 0,
+                            "y_min": 0,
+                            "x_max": 0,
+                            "y_max": 0
+                         }}
+                      }}
+                   ],
+                   "analysis": {{
+                      "summary": "",
+                      "remedy": ""
+                   }}
+                  }}
 
-JSON SCHEMA:
-{{
-  "detections": [
-    {{
-      "label": "fall_army_worm",
-      "confidence": 0.92,
-      "box": {{"x_min": 10, "y_min": 15, "x_max": 120, "y_max": 180}}
-    }}
-  ],
-  "analysis": {{
-    "summary": "Short natural language summary of the findings.",
-    "remedy": "Actionable mitigation steps if pests/diseases are detected."
-  }}
-}}""".strip()
+                  • Do NOT output markdown
+                  • Do NOT output ```json
+                  • Do NOT output text before or after JSON
+                  • All box fields MUST have keys: x_min, y_min, x_max, y_max
+                  • All numeric values MUST be numbers
+                  • If nothing is detected, return: {{"detections":[],"analysis":{{"summary":"","remedy":""}}}}
+                  """.strip()
 
     @staticmethod
     def _encode_image(image: Image.Image) -> str:

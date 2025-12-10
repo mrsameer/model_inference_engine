@@ -1811,6 +1811,39 @@ async def run_inference(payload: InferenceRequest):
                 crop=payload.crop,
                 image_url=str(payload.image_url) if payload.image_url else None,
             )
+            # Convert 1000-normalized bounding boxes to pixel coordinates
+            if outputs.get("detections") and payload.image_url:
+                try:
+                    # Fetch image to get dimensions
+                    async with httpx.AsyncClient(timeout=30) as client:
+                        img_response = await client.get(str(payload.image_url))
+                        img_response.raise_for_status()
+                        img = Image.open(io.BytesIO(img_response.content))
+                        # Fix EXIF rotation
+                        from PIL import ImageOps
+
+                        img = ImageOps.exif_transpose(img)
+                        width, height = img.size
+
+                    # Convert coordinates from 1000-normalized to pixels
+                    for detection in outputs["detections"]:
+                        box = detection.box
+                        detection.box = BoundingBox(
+                            x_min=float(box.x_min * width / 1000),
+                            y_min=float(box.y_min * height / 1000),
+                            x_max=float(box.x_max * width / 1000),
+                            y_max=float(box.y_max * height / 1000),
+                        )
+                    logger.info(
+                        "Converted qwen25_vllm bbox from 1000-norm to pixels "
+                        "(image: %dx%d)",
+                        width,
+                        height,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to convert qwen25_vllm bbox coordinates: %s", e
+                    )
         else:
             # Pass crop parameter to all models (including vlm_ss)
             outputs = await runner.infer(

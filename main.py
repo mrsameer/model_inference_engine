@@ -1621,7 +1621,7 @@ def register_default_models():
         qwen25_vllm,
         lambda card=qwen25_vllm: Qwen25VLLMRunner(
             card=card,
-            model_name="Qwen/Qwen2.5-VL-7B-Instruct",
+            model_name="RajeshKatta554/Qwen-Finetuned",
             crop_type="all",
         ),
     )

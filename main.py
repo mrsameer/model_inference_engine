@@ -635,44 +635,59 @@ class Qwen3VLMRunner(BaseModelRunner):
 
     def _build_prompt(self, crop_type: str, user_crop_name: str | None = None) -> str:
         config = GeminiVLMRunner.PEST_CONFIGS[crop_type]
+        pests_list = config["pests"]
         pests_details = "\n".join(
-            f"- {pest}: {config['detection_details'][pest]}" for pest in config["pests"]
+            f"- {pest}: {config['detection_details'][pest]}" for pest in pests_list
         )
         crop_context = crop_type.upper()
         if user_crop_name and user_crop_name.lower() != crop_type:
             crop_context += f" (User specified: {user_crop_name})"
 
+        # Use the first pest as example label in the JSON structure
+        example_label = pests_list[0] if pests_list else "pest"
+
         return f"""
-                  You are an expert agricultural entomologist. Analyze this image for Fall Army Worm on {crop_context} crops.
+You are an expert agricultural entomologist and plant pathologist. Analyze this image for pests, symptoms, and diseases on {crop_context} crops.
 
-                  Return ONLY valid JSON with this exact structure:
+DETECTION TARGETS:
+{pests_details}
 
-                  {{
-                   "detections": [
-                      {{
-                         "label": "fall_army_worm",
-                         "confidence": 0.0,
-                         "box": {{
-                            "x_min": 0,
-                            "y_min": 0,
-                            "x_max": 0,
-                            "y_max": 0
-                         }}
-                      }}
-                   ],
-                   "analysis": {{
-                      "summary": "",
-                      "remedy": ""
-                   }}
-                  }}
+INSTRUCTIONS:
+- Detect ALL instances of the pests/diseases listed above
+- For each detection, provide a bounding box with coordinates
+- Use snake_case labels matching the pest names above (e.g., "{example_label}")
+- Confidence should be between 0.0 and 1.0
+- Only include detections with confidence > 0.5
+- Provide accurate bounding boxes that tightly fit the detected objects
 
-                  • Do NOT output markdown
-                  • Do NOT output ```json
-                  • Do NOT output text before or after JSON
-                  • All box fields MUST have keys: x_min, y_min, x_max, y_max
-                  • All numeric values MUST be numbers
-                  • If nothing is detected, return: {{"detections":[],"analysis":{{"summary":"","remedy":""}}}}
-                  """.strip()
+Return ONLY valid JSON with this exact structure:
+
+{{
+  "detections": [
+    {{
+      "label": "{example_label}",
+      "confidence": 0.85,
+      "box": {{
+        "x_min": 100,
+        "y_min": 150,
+        "x_max": 300,
+        "y_max": 400
+      }}
+    }}
+  ],
+  "analysis": {{
+    "summary": "Brief description of what was found",
+    "remedy": "Recommended treatment or action"
+  }}
+}}
+
+• Do NOT output markdown
+• Do NOT output ```json
+• Do NOT output text before or after JSON
+• All box fields MUST have keys: x_min, y_min, x_max, y_max
+• All numeric values MUST be numbers
+• If nothing is detected, return: {{"detections":[],"analysis":{{"summary":"No pests or diseases detected","remedy":"Continue regular monitoring"}}}}
+""".strip()
 
     @staticmethod
     def _encode_image(image: Image.Image) -> str:

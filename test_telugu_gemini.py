@@ -11,6 +11,7 @@ from PIL import Image
 
 # Add parent directory to path
 import sys
+
 sys.path.insert(0, os.path.dirname(__file__))
 
 # Import the components we need from main.py
@@ -21,6 +22,7 @@ load_dotenv()
 
 # Test image URL - maize with fall army worm
 IMAGE_URL = "https://aspire.ap.gov.in/api/minio/download/stream?objectName=documents/4c15515a-97df-4eda-8616-3670a704d09e/1000118034.jpg"
+
 
 async def test_telugu_support():
     """Test Telugu language support in GeminiVLMRunner."""
@@ -101,6 +103,7 @@ async def test_telugu_support():
         except Exception as e:
             print(f"❌ Error: {type(e).__name__}: {e}")
             import traceback
+
             traceback.print_exc()
             return False
 
@@ -110,6 +113,7 @@ async def test_telugu_support():
     print("✓ TELUGU LANGUAGE SUPPORT TEST PASSED")
     print("=" * 80)
     return True
+
 
 if __name__ == "__main__":
     success = asyncio.run(test_telugu_support())

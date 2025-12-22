@@ -9,7 +9,7 @@ english_request = {
     "user_id": "test_user_123",
     "crop": "maize",
     "language": "en",  # English
-    "image_url": "https://aspire.ap.gov.in/api/minio/download/stream?objectName=documents/4c15515a-97df-4eda-8616-3670a704d09e/1000118034.jpg"
+    "image_url": "https://aspire.ap.gov.in/api/minio/download/stream?objectName=documents/4c15515a-97df-4eda-8616-3670a704d09e/1000118034.jpg",
 }
 
 # Example API request for Telugu
@@ -18,7 +18,7 @@ telugu_request = {
     "user_id": "test_user_123",
     "crop": "maize",
     "language": "te",  # Telugu
-    "image_url": "https://aspire.ap.gov.in/api/minio/download/stream?objectName=documents/4c15515a-97df-4eda-8616-3670a704d09e/1000118034.jpg"
+    "image_url": "https://aspire.ap.gov.in/api/minio/download/stream?objectName=documents/4c15515a-97df-4eda-8616-3670a704d09e/1000118034.jpg",
 }
 
 print("=" * 80)

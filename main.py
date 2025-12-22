@@ -698,7 +698,9 @@ class Qwen3VLMRunner(BaseModelRunner):
         self.model_name = model_name
         self.crop_type = crop_type
 
-    def _select_crop_type(self, crop: str | None, prompt: str | None) -> tuple[str, str | None]:
+    def _select_crop_type(
+        self, crop: str | None, prompt: str | None
+    ) -> tuple[str, str | None]:
         crop_type = self.crop_type
         user_crop_name = crop
 
@@ -785,7 +787,9 @@ Return ONLY valid JSON with this exact structure:
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
     @staticmethod
-    def _extract_bbox(entry: Dict[str, Any]) -> tuple[float, float, float, float] | None:
+    def _extract_bbox(
+        entry: Dict[str, Any],
+    ) -> tuple[float, float, float, float] | None:
         box = entry.get("box") or entry.get("bbox")
         if isinstance(box, dict):
             x_min = box.get("x_min") or box.get("xmin")
@@ -813,7 +817,9 @@ Return ONLY valid JSON with this exact structure:
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError:
-            fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+            fence_match = re.search(
+                r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL
+            )
             if fence_match:
                 snippet = fence_match.group(1)
                 return json.loads(snippet)
@@ -860,14 +866,18 @@ Return ONLY valid JSON with this exact structure:
             raw_result = response.json()
         except Exception as exc:  # pragma: no cover - defensive guard
             logger.error("Failed to parse Qwen3 VLM HTTP response: %s", exc)
-            raise HTTPException(status_code=502, detail="Invalid Ollama API response") from exc
+            raise HTTPException(
+                status_code=502, detail="Invalid Ollama API response"
+            ) from exc
 
         llm_output = raw_result.get("response") or raw_result.get("message") or ""
         try:
             parsed = self._parse_llm_json(llm_output)
         except Exception as exc:
             logger.error("Qwen3 VLM returned non-JSON payload: %s", exc)
-            raise HTTPException(status_code=502, detail="Qwen3 response is not valid JSON") from exc
+            raise HTTPException(
+                status_code=502, detail="Qwen3 response is not valid JSON"
+            ) from exc
 
         detections: List[Detection] = []
         answers: List[VisionLanguageAnswer] = []
@@ -1038,9 +1048,7 @@ class Qwen25VLLMRunner(Qwen3VLMRunner):
             "max_tokens": 1024,
         }
 
-        logger.info(
-            "Calling Qwen2.5 VLLM via vLLM API for crop: %s", crop_type
-        )
+        logger.info("Calling Qwen2.5 VLLM via vLLM API for crop: %s", crop_type)
         logger.info("Qwen2.5 VLLM - Image URL: %s", image_url)
         logger.info("Qwen2.5 VLLM - Prompt being sent: %s", combined_prompt)
         try:
@@ -1101,9 +1109,7 @@ class Qwen25VLLMRunner(Qwen3VLMRunner):
             return {
                 "detections": [],
                 "answers": [
-                    VisionLanguageAnswer(
-                        answer=text_content.strip(), confidence=0.5
-                    )
+                    VisionLanguageAnswer(answer=text_content.strip(), confidence=0.5)
                 ],
             }
 
@@ -1311,7 +1317,9 @@ class ClipVLMRunner(BaseModelRunner):
                 or pest_symptom.get("severityLevel")
                 or "UNKNOWN"
             )
-            pest_stage = pest_symptom.get("pestStage") or pest_symptom.get("stage") or "Unknown"
+            pest_stage = (
+                pest_symptom.get("pestStage") or pest_symptom.get("stage") or "Unknown"
+            )
             pest_harm_level = (
                 pest_symptom.get("pestHarmLevel")
                 or pest_symptom.get("damageLevel")

@@ -1462,9 +1462,22 @@ async def log_inference_to_db(
 
 
 async def get_user_history(
-    user_id: str, page: int = 1, page_size: int = 10
+    user_id: str, page: int = 1, page_size: int = 10, response_language: str = None
 ) -> tuple[int, List[InferenceHistoryItem]]:
-    """Retrieve inference history for a user with pagination."""
+    """
+    Retrieve inference history for a user with pagination.
+
+    Args:
+        user_id: User identifier
+        page: Page number for pagination
+        page_size: Number of items per page
+        response_language: Optional language code to regenerate answers in.
+                          If provided, answers will be regenerated in this language
+                          regardless of the original request language.
+
+    Returns:
+        Tuple of (total_count, list_of_history_items)
+    """
     try:
         async with aiosqlite.connect(DB_PATH) as conn:
             conn.row_factory = aiosqlite.Row
@@ -1511,9 +1524,52 @@ async def get_user_history(
 
             # Get language with fallback for old records
             try:
-                language = row["language"]
+                original_language = row["language"]
             except (KeyError, IndexError):
-                language = "en"  # Default to English for old records without language
+                original_language = "en"  # Default to English for old records without language
+
+            # Determine which language to use for answers
+            target_language = response_language if response_language else original_language
+
+            # Validate target language
+            if target_language not in PEST_INFO:
+                logger.warning(
+                    "Invalid response_language '%s', falling back to '%s'",
+                    target_language,
+                    original_language,
+                )
+                target_language = original_language if original_language in PEST_INFO else "en"
+
+            # Regenerate answers in target language if detections exist and language differs
+            if detections and response_language and response_language != original_language:
+                # Extract unique pest types from detections
+                unique_pests = set()
+                for detection in detections:
+                    label = detection.label.lower()
+                    for pest_name in PEST_INFO[target_language].keys():
+                        if label.startswith(pest_name) or pest_name in label:
+                            unique_pests.add(pest_name)
+                            break
+
+                # Regenerate answers in target language
+                if unique_pests:
+                    answers = []
+                    for pest_name in sorted(unique_pests):
+                        if pest_name in PEST_INFO[target_language]:
+                            info = PEST_INFO[target_language][pest_name]
+                            answer_text = f"**{info['name']}**\n\n"
+                            answer_text += f"{info['description']}\n\n"
+                            remedies_label = "Remedies" if target_language == "en" else "నివారణలు"
+                            answer_text += f"**{remedies_label}:**\n{info['remedies']}"
+                            answers.append(
+                                VisionLanguageAnswer(answer=answer_text, confidence=1.0)
+                            )
+                    logger.info(
+                        "Regenerated answers in '%s' for history item %d (original: '%s')",
+                        target_language,
+                        row["id"],
+                        original_language,
+                    )
 
             items.append(
                 InferenceHistoryItem(
@@ -1521,14 +1577,14 @@ async def get_user_history(
                     user_id=row["user_id"],
                     model_id=row["model_id"],
                     crop=row["crop"],
-                    language=language,
+                    language=original_language,  # Keep original language for tracking
                     image_source=row["image_source"],
                     image_url=row["image_url"],
                     prompt=row["prompt"],
                     duration_ms=row["duration_ms"],
                     detections_count=row["detections_count"],
                     detections=detections,
-                    answers=answers,
+                    answers=answers,  # Possibly regenerated in target language
                     created_at=row["created_at"],
                 )
             )
@@ -1877,7 +1933,9 @@ async def get_models():
 
 
 @app.get("/history/{user_id}", response_model=InferenceHistoryResponse)
-async def get_history(user_id: str, page: int = 1, page_size: int = 10):
+async def get_history(
+    user_id: str, page: int = 1, page_size: int = 10, language: str = None
+):
     """
     Get inference history for a specific user with pagination.
 
@@ -1885,9 +1943,18 @@ async def get_history(user_id: str, page: int = 1, page_size: int = 10):
         user_id: User identifier
         page: Page number (default: 1)
         page_size: Number of items per page (default: 10, max: 100)
+        language: Optional language code ('en' or 'te') to retrieve answers in.
+                 If provided, answers will be regenerated in this language
+                 regardless of the original request language.
+                 If not provided, answers will be in the original request language.
 
     Returns:
-        Paginated inference history
+        Paginated inference history with answers in requested language
+
+    Examples:
+        GET /history/farmer123?page=1&page_size=10           # Original language
+        GET /history/farmer123?page=1&language=te            # Force Telugu
+        GET /history/farmer123?page=1&language=en            # Force English
     """
     if page < 1:
         raise HTTPException(status_code=400, detail="Page must be >= 1")
@@ -1898,7 +1965,7 @@ async def get_history(user_id: str, page: int = 1, page_size: int = 10):
         )
 
     try:
-        total, items = await get_user_history(user_id, page, page_size)
+        total, items = await get_user_history(user_id, page, page_size, language)
         return InferenceHistoryResponse(
             total=total, page=page, page_size=page_size, items=items
         )

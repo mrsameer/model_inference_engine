@@ -22,7 +22,7 @@ RUN apt-get update \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 WORKDIR /app
 

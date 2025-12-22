@@ -83,6 +83,10 @@ class InferenceRequest(BaseModel):
         default=None,
         description="Optional task type for CLIP VLM (e.g., 'pest', 'disease', 'nutrient')",
     )
+    language: str = Field(
+        default="en",
+        description="Language for responses (e.g., 'en' for English, 'te' for Telugu)",
+    )
     prompt: str | None = Field(
         default=None,
         description="Optional text prompt or question for vision-language models",
@@ -137,7 +141,11 @@ class BaseModelRunner:
         self.card = card
 
     async def infer(
-        self, image: Image.Image, prompt: str | None, crop: str | None = None
+        self,
+        image: Image.Image,
+        prompt: str | None,
+        crop: str | None = None,
+        language: str = "en",
     ) -> Dict[str, Any]:
         raise NotImplementedError
 
@@ -207,7 +215,11 @@ class YoloRunner(BaseModelRunner):
         return {"detections": detections}
 
     async def infer(
-        self, image: Image.Image, prompt: str | None, crop: str | None = None
+        self,
+        image: Image.Image,
+        prompt: str | None,
+        crop: str | None = None,
+        language: str = "en",
     ) -> Dict[str, List[Detection]]:
         """Async inference wrapper."""
         return await asyncio.to_thread(self._infer_sync, image, prompt)
@@ -253,45 +265,101 @@ class VisionLanguageRunner(BaseModelRunner):
         return {"answers": answers}
 
     async def infer(
-        self, image: Image.Image, prompt: str | None, crop: str | None = None
+        self,
+        image: Image.Image,
+        prompt: str | None,
+        crop: str | None = None,
+        language: str = "en",
     ) -> Dict[str, List[VisionLanguageAnswer]]:
         """Async inference wrapper."""
         return await asyncio.to_thread(self._infer_sync, image, prompt)
 
 
-# Static descriptions and remedies for each pest/disease
+# Static descriptions and remedies for each pest/disease in multiple languages
 PEST_INFO = {
-    "fall_army_worm": {
-        "description": "Fall Army Worm is a destructive pest that attacks maize crops. Larvae feed on leaves, creating characteristic ragged holes and windows in the foliage. The caterpillars have an inverted Y-shaped marking on their head capsule.",
-        "remedies": "Apply neem-based bio-pesticides or chemical insecticides like Emamectin Benzoate. Use pheromone traps for early detection. Practice crop rotation and intercropping with non-host plants. Remove and destroy infested plants.",
+    "en": {
+        "fall_army_worm": {
+            "name": "Fall Army Worm",
+            "description": "Fall Army Worm is a destructive pest that attacks maize crops. Larvae feed on leaves, creating characteristic ragged holes and windows in the foliage. The caterpillars have an inverted Y-shaped marking on their head capsule.",
+            "remedies": "Apply neem-based bio-pesticides or chemical insecticides like Emamectin Benzoate. Use pheromone traps for early detection. Practice crop rotation and intercropping with non-host plants. Remove and destroy infested plants.",
+        },
+        "sheath_blight": {
+            "name": "Sheath Blight",
+            "description": "Sheath Blight is a fungal disease affecting paddy crops caused by Rhizoctonia solani. It appears as oval or irregular greenish-gray lesions on leaf sheaths, which later turn brown with a dark brown border. Can cause significant yield loss.",
+            "remedies": "Use resistant varieties. Apply fungicides like Validamycin or Hexaconazole at early infection stages. Maintain proper plant spacing for air circulation. Avoid excessive nitrogen fertilization. Practice field sanitation by removing crop debris.",
+        },
+        "brown_plant_hopper": {
+            "name": "Brown Plant Hopper",
+            "description": "Brown Plant Hopper (BPH) is a serious insect pest of rice that feeds on plant sap, causing hopperburn - yellowing and drying of plants. They are small brown insects typically found at the base of rice plants and can transmit viral diseases.",
+            "remedies": "Use resistant rice varieties. Apply neem oil or insecticides like Imidacloprid or Fipronil. Avoid excessive nitrogen application. Maintain proper water management. Use light traps for monitoring. Encourage natural predators like spiders and mirid bugs.",
+        },
+        "pink_boll_worm": {
+            "name": "Pink Boll Worm",
+            "description": "Pink Boll Worm is a major pest of cotton that attacks cotton bolls. Larvae bore into bolls causing damage to developing seeds and lint. Entry holes are visible on bolls, often with frass (insect waste). Severely affected bolls fail to open properly.",
+            "remedies": "Use pheromone traps for mass trapping and monitoring. Plant Bt cotton varieties. Apply chemical insecticides like Cypermethrin during flowering and boll formation. Practice clean cultivation by destroying crop residues. Follow recommended spacing and avoid late season irrigation.",
+        },
+        "white_fly": {
+            "name": "White Fly",
+            "description": "White Fly is a tiny sap-sucking insect pest commonly found on cotton and other crops. Adults and nymphs feed on the underside of leaves, causing yellowing, leaf curling, and reduced plant vigor. They also secrete honeydew, leading to sooty mold growth.",
+            "remedies": "Use yellow sticky traps for monitoring and control. Apply neem-based products or chemical insecticides like Acetamiprid or Spiromesifen. Encourage natural predators like ladybird beetles and lacewings. Practice crop rotation. Remove heavily infested leaves. Maintain field sanitation.",
+        },
+        "paddy_smut": {
+            "name": "Paddy Smut",
+            "description": "Paddy Smut is a fungal disease affecting rice crops caused by Tilletia barclayana. It appears as blackish powdery masses (spore balls) emerging from individual grains. Infected grains are replaced by smut balls containing dark spores. The disease reduces grain quality and yield.",
+            "remedies": "Use disease-free certified seeds. Treat seeds with fungicides like Carboxin or Thiram before sowing. Practice crop rotation with non-host crops. Remove and destroy infected plants to prevent spore spread. Maintain proper field sanitation and avoid waterlogged conditions.",
+        },
+        "rice_leaf_roller": {
+            "name": "Rice Leaf Roller",
+            "description": "Rice Leaf Roller is a major insect pest of rice/paddy crops. The larvae fold or roll rice leaves lengthwise and feed inside, causing white transparent patches on leaves. Heavy infestations lead to reduced photosynthesis, stunted growth, and significant yield loss.",
+            "remedies": "Use light traps for monitoring and mass trapping of adult moths. Apply neem-based bio-pesticides or chemical insecticides like Chlorpyrifos or Cartap Hydrochloride during early infestation. Encourage natural predators like spiders, dragonflies, and parasitic wasps. Practice proper water management and avoid excessive nitrogen fertilization. Remove damaged leaves to reduce further infestation.",
+        },
+        "bacterial_leaf_blight": {
+            "name": "Bacterial Leaf Blight",
+            "description": "Bacterial Leaf Blight (BLB) is a serious bacterial disease of rice caused by Xanthomonas oryzae. It appears as water-soaked lesions on leaf tips and edges that turn yellow and then grayish-white as they dry. The disease can cause severe yield losses, especially in tropical and subtropical regions during warm, humid conditions.",
+            "remedies": "Use resistant rice varieties. Apply copper-based bactericides like Copper Oxychloride during early disease stages. Practice crop rotation and use disease-free certified seeds. Maintain balanced fertilization, avoiding excessive nitrogen. Improve field drainage and avoid overhead irrigation. Remove and destroy infected plant debris. Apply recommended doses of potassium to increase plant resistance.",
+        },
     },
-    "sheath_blight": {
-        "description": "Sheath Blight is a fungal disease affecting paddy crops caused by Rhizoctonia solani. It appears as oval or irregular greenish-gray lesions on leaf sheaths, which later turn brown with a dark brown border. Can cause significant yield loss.",
-        "remedies": "Use resistant varieties. Apply fungicides like Validamycin or Hexaconazole at early infection stages. Maintain proper plant spacing for air circulation. Avoid excessive nitrogen fertilization. Practice field sanitation by removing crop debris.",
-    },
-    "brown_plant_hopper": {
-        "description": "Brown Plant Hopper (BPH) is a serious insect pest of rice that feeds on plant sap, causing hopperburn - yellowing and drying of plants. They are small brown insects typically found at the base of rice plants and can transmit viral diseases.",
-        "remedies": "Use resistant rice varieties. Apply neem oil or insecticides like Imidacloprid or Fipronil. Avoid excessive nitrogen application. Maintain proper water management. Use light traps for monitoring. Encourage natural predators like spiders and mirid bugs.",
-    },
-    "pink_boll_worm": {
-        "description": "Pink Boll Worm is a major pest of cotton that attacks cotton bolls. Larvae bore into bolls causing damage to developing seeds and lint. Entry holes are visible on bolls, often with frass (insect waste). Severely affected bolls fail to open properly.",
-        "remedies": "Use pheromone traps for mass trapping and monitoring. Plant Bt cotton varieties. Apply chemical insecticides like Cypermethrin during flowering and boll formation. Practice clean cultivation by destroying crop residues. Follow recommended spacing and avoid late season irrigation.",
-    },
-    "white_fly": {
-        "description": "White Fly is a tiny sap-sucking insect pest commonly found on cotton and other crops. Adults and nymphs feed on the underside of leaves, causing yellowing, leaf curling, and reduced plant vigor. They also secrete honeydew, leading to sooty mold growth.",
-        "remedies": "Use yellow sticky traps for monitoring and control. Apply neem-based products or chemical insecticides like Acetamiprid or Spiromesifen. Encourage natural predators like ladybird beetles and lacewings. Practice crop rotation. Remove heavily infested leaves. Maintain field sanitation.",
-    },
-    "paddy_smut": {
-        "description": "Paddy Smut is a fungal disease affecting rice crops caused by Tilletia barclayana. It appears as blackish powdery masses (spore balls) emerging from individual grains. Infected grains are replaced by smut balls containing dark spores. The disease reduces grain quality and yield.",
-        "remedies": "Use disease-free certified seeds. Treat seeds with fungicides like Carboxin or Thiram before sowing. Practice crop rotation with non-host crops. Remove and destroy infected plants to prevent spore spread. Maintain proper field sanitation and avoid waterlogged conditions.",
-    },
-    "rice_leaf_roller": {
-        "description": "Rice Leaf Roller is a major insect pest of rice/paddy crops. The larvae fold or roll rice leaves lengthwise and feed inside, causing white transparent patches on leaves. Heavy infestations lead to reduced photosynthesis, stunted growth, and significant yield loss.",
-        "remedies": "Use light traps for monitoring and mass trapping of adult moths. Apply neem-based bio-pesticides or chemical insecticides like Chlorpyrifos or Cartap Hydrochloride during early infestation. Encourage natural predators like spiders, dragonflies, and parasitic wasps. Practice proper water management and avoid excessive nitrogen fertilization. Remove damaged leaves to reduce further infestation.",
-    },
-    "bacterial_leaf_blight": {
-        "description": "Bacterial Leaf Blight (BLB) is a serious bacterial disease of rice caused by Xanthomonas oryzae. It appears as water-soaked lesions on leaf tips and edges that turn yellow and then grayish-white as they dry. The disease can cause severe yield losses, especially in tropical and subtropical regions during warm, humid conditions.",
-        "remedies": "Use resistant rice varieties. Apply copper-based bactericides like Copper Oxychloride during early disease stages. Practice crop rotation and use disease-free certified seeds. Maintain balanced fertilization, avoiding excessive nitrogen. Improve field drainage and avoid overhead irrigation. Remove and destroy infected plant debris. Apply recommended doses of potassium to increase plant resistance.",
+    "te": {
+        "fall_army_worm": {
+            "name": "ఫాల్ ఆర్మీ వార్మ్",
+            "description": "ఫాల్ ఆర్మీ వార్మ్ మొక్కజొన్న పంటలపై దాడి చేసే విధ్వంసక తెగులు. లార్వా ఆకులను తింటుంది, ఆకులలో చిరిగిన రంధ్రాలు మరియు కిటికీల వంటి లక్షణాలను సృష్టిస్తుంది. గొంగళి పురుగుల తల క్యాప్సూల్‌పై విలోమ Y-ఆకారపు గుర్తు ఉంటుంది.",
+            "remedies": "వేప ఆధారిత జీవ-పురుగుమందులు లేదా ఎమామెక్టిన్ బెంజోయేట్ వంటి రసాయన పురుగుమందులను వర్తింపజేయండి. ముందస్తు గుర్తింపు కోసం ఫెరోమోన్ ట్రాప్‌లను ఉపయోగించండి. పంట మార్పిడి మరియు అతిధేయేతర మొక్కలతో మధ్యవర్తి సాగు చేయండి. సోకిన మొక్కలను తొలగించి నాశనం చేయండి.",
+        },
+        "sheath_blight": {
+            "name": "షీత్ బ్లైట్",
+            "description": "షీత్ బ్లైట్ అనేది రైజోక్టోనియా సొలానీ వల్ల కలిగే వరి పంటలను ప్రభావితం చేసే శిలీంధ్ర వ్యాధి. ఇది ఆకు తొడుగులపై అండాకార లేదా క్రమరహిత ఆకుపచ్చ-బూడిద గాయాలుగా కనిపిస్తుంది, తరువాత ముదురు గోధుమ రంగు అంచుతో గోధుమ రంగులోకి మారుతుంది. గణనీయమైన దిగుబడి నష్టానికి కారణమవుతుంది.",
+            "remedies": "నిరోధక రకాలను ఉపయోగించండి. ప్రారంభ సంక్రమణ దశలలో వాలిడామైసిన్ లేదా హెక్సాకోనజోల్ వంటి శిలీంధ్ర నాశకాలను వర్తింపజేయండి. గాలి ప్రసరణ కోసం సరైన మొక్కల అంతరాన్ని నిర్వహించండి. అధిక నత్రజని ఎరువులను నివారించండి. పంట వ్యర్థాలను తొలగించడం ద్వారా పొలం పరిశుభ్రతను పాటించండి.",
+        },
+        "brown_plant_hopper": {
+            "name": "బ్రౌన్ ప్లాంట్ హాపర్",
+            "description": "బ్రౌన్ ప్లాంట్ హాపర్ (BPH) అనేది వరి యొక్క తీవ్రమైన కీటక తెగులు, ఇది మొక్కల రసాన్ని తింటుంది, హాపర్‌బర్న్‌కు కారణమవుతుంది - మొక్కలు పసుపు రంగులోకి మారడం మరియు ఎండిపోవడం. అవి సాధారణంగా వరి మొక్కల బేస్ వద్ద కనిపించే చిన్న గోధుమ కీటకాలు మరియు వైరల్ వ్యాధులను వ్యాపింపజేయగలవు.",
+            "remedies": "నిరోధక వరి రకాలను ఉపయోగించండి. వేప నూనె లేదా ఇమిడాక్లోప్రిడ్ లేదా ఫిప్రోనిల్ వంటి పురుగుమందులను వర్తింపజేయండి. అధిక నత్రజని అన్వయాన్ని నివారించండి. సరైన నీటి నిర్వహణను కొనసాగించండి. పర్యవేక్షణ కోసం కాంతి ట్రాప్‌లను ఉపయోగించండి. సాలెపురుగులు మరియు మిరిడ్ బగ్స్ వంటి సహజ మాంసాహారులను ప్రోత్సహించండి.",
+        },
+        "pink_boll_worm": {
+            "name": "పింక్ బోల్ వార్మ్",
+            "description": "పింక్ బోల్ వార్మ్ అనేది పత్తి బొండలపై దాడి చేసే పత్తి యొక్క ప్రధాన తెగులు. లార్వా బొండలలోకి చొచ్చుకుపోయి అభివృద్ధి చెందుతున్న విత్తనాలు మరియు పత్తికి నష్టం కలిగిస్తుంది. బొండలపై ప్రవేశ రంధ్రాలు కనిపిస్తాయి, తరచుగా ఫ్రాస్ (కీటక వ్యర్థం) ఉంటుంది. తీవ్రంగా ప్రభావితమైన బొండలు సరిగ్గా తెరవడంలో విఫలమవుతాయి.",
+            "remedies": "సామూహిక ట్రాపింగ్ మరియు పర్యవేక్షణ కోసం ఫెరోమోన్ ట్రాప్‌లను ఉపయోగించండి. Bt పత్తి రకాలను నాటండి. పుష్పించే మరియు బొండ ఏర్పడే సమయంలో సైపర్మెత్రిన్ వంటి రసాయన పురుగుమందులను వర్తింపజేయండి. పంట అవశేషాలను నాశనం చేయడం ద్వారా శుభ్రమైన సాగును పాటించండి. సిఫార్సు చేసిన అంతరాన్ని అనుసరించండి మరియు చివరి కాలం నీటిపారుదలను నివారించండి.",
+        },
+        "white_fly": {
+            "name": "వైట్ ఫ్లై",
+            "description": "వైట్ ఫ్లై అనేది పత్తి మరియు ఇతర పంటలపై సాధారణంగా కనిపించే చిన్న రసం పీల్చే కీటక తెగులు. పెద్దవాటి మరియు నింఫ్‌లు ఆకుల దిగువ భాగంలో తింటాయి, పసుపు రంగు మారడం, ఆకు ముడుచుకోవడం మరియు మొక్కల శక్తి తగ్గడం. అవి తేనె స్రవిస్తాయి, మసి అచ్చు పెరుగుదలకు దారితీస్తాయి.",
+            "remedies": "పర్యవేక్షణ మరియు నియంత్రణ కోసం పసుపు స్టిక్కీ ట్రాప్‌లను ఉపయోగించండి. వేప ఆధారిత ఉత్పత్తులు లేదా అసిటామిప్రిడ్ లేదా స్పిరోమెసిఫెన్ వంటి రసాయన పురుగుమందులను వర్తింపజేయండి. లేడీబర్డ్ బీటిల్స్ మరియు లేస్‌వింగ్స్ వంటి సహజ మాంసాహారులను ప్రోత్సహించండి. పంట మార్పిడి ప్రాక్టీస్ చేయండి. తీవ్రంగా సోకిన ఆకులను తొలగించండి. పొలం పరిశుభ్రతను నిర్వహించండి.",
+        },
+        "paddy_smut": {
+            "name": "వరి స్మట్",
+            "description": "వరి స్మట్ అనేది టిల్లెటియా బార్క్లయానా వల్ల కలిగే వరి పంటలను ప్రభావితం చేసే శిలీంధ్ర వ్యాధి. ఇది వ్యక్తిగత ధాన్యాల నుండి ఉద్భవించే నల్లని పొడి ద్రవ్యరాశులు (బీజాంశ బంతులు)గా కనిపిస్తుంది. సోకిన ధాన్యాలు చీకటి బీజాంశాలను కలిగి ఉన్న స్మట్ బంతులతో భర్తీ చేయబడతాయి. వ్యాధి ధాన్యం నాణ్యత మరియు దిగుబడిని తగ్గిస్తుంది.",
+            "remedies": "వ్యాధి రహిత ధృవీకరించిన విత్తనాలను ఉపయోగించండి. విత్తనాలను నాటడానికి ముందు కార్బాక్సిన్ లేదా థైరామ్ వంటి శిలీంధ్ర నాశకాలతో చికిత్స చేయండి. అతిధేయేతర పంటలతో పంట మార్పిడి ప్రాక్టీస్ చేయండి. బీజాంశ వ్యాప్తిని నిరోధించడానికి సోకిన మొక్కలను తొలగించి నాశనం చేయండి. సరైన పొలం పరిశుభ్రతను నిర్వహించండి మరియు నీరు నిలిచిన పరిస్థితులను నివారించండి.",
+        },
+        "rice_leaf_roller": {
+            "name": "వరి ఆకు రోలర్",
+            "description": "వరి ఆకు రోలర్ అనేది వరి/వరి పంటల ప్రధాన కీటక తెగులు. లార్వా వరి ఆకులను పొడవుగా మడిచి లేదా చుట్టి లోపల తింటుంది, ఆకులపై తెల్లని పారదర్శక మచ్చలను కలిగిస్తుంది. భారీ ఆక్రమణలు కిరణజన్య సంయోగక్రియ తగ్గడం, కుంగిపోయిన పెరుగుదల మరియు గణనీయమైన దిగుబడి నష్టానికి దారితీస్తాయి.",
+            "remedies": "వయోజన చిమ్మటల పర్యవేక్షణ మరియు సామూహిక ట్రాపింగ్ కోసం కాంతి ట్రాప్‌లను ఉపయోగించండి. ప్రారంభ ఆక్రమణ సమయంలో వేప ఆధారిత జీవ-పురుగుమందులు లేదా క్లోర్పైరిఫాస్ లేదా కార్టాప్ హైడ్రోక్లోరైడ్ వంటి రసాయన పురుగుమందులను వర్తింపజేయండి. సాలెపురుగులు, డ్రాగన్‌ఫ్లైస్ మరియు పరాన్నజీవి కందిరీగలు వంటి సహజ మాంసాహారులను ప్రోత్సహించండి. సరైన నీటి నిర్వహణను ప్రాక్టీస్ చేయండి మరియు అధిక నత్రజని ఎరువులను నివారించండి. మరింత ఆక్రమణను తగ్గించడానికి దెబ్బతిన్న ఆకులను తొలగించండి.",
+        },
+        "bacterial_leaf_blight": {
+            "name": "బాక్టీరియల్ లీఫ్ బ్లైట్",
+            "description": "బాక్టీరియల్ లీఫ్ బ్లైట్ (BLB) అనేది జాంథోమోనాస్ ఒరైజే వల్ల కలిగే వరి యొక్క తీవ్రమైన బాక్టీరియా వ్యాధి. ఇది ఆకు చిట్కాలు మరియు అంచులపై నీటి నానబెట్టిన గాయాలుగా కనిపిస్తుంది, అవి పసుపు రంగులోకి మారుతాయి మరియు తర్వాత ఎండిపోతుండగా బూడిద-తెలుపు రంగులోకి మారుతాయి. వ్యాధి తీవ్రమైన దిగుబడి నష్టాలకు కారణం కావచ్చు, ముఖ్యంగా వెచ్చని, తేమతో కూడిన పరిస్థితులలో ఉష్ణమండల మరియు ఉపఉష్ణమండల ప్రాంతాలలో.",
+            "remedies": "నిరోధక వరి రకాలను ఉపయోగించండి. ప్రారంభ వ్యాధి దశలలో కాపర్ ఆక్సీక్లోరైడ్ వంటి రాగి ఆధారిత బాక్టీరిసైడ్‌లను వర్తింపజేయండి. పంట మార్పిడి ప్రాక్టీస్ చేయండి మరియు వ్యాధి రహిత ధృవీకరించిన విత్తనాలను ఉపయోగించండి. సమతుల్య ఎరువులను నిర్వహించండి, అధిక నత్రజనిని నివారించండి. పొలం నీటి నిష్కాసనను మెరుగుపరచండి మరియు ఓవర్‌హెడ్ నీటిపారుదలను నివారించండి. సోకిన మొక్కల వ్యర్థాలను తొలగించి నాశనం చేయండి. మొక్కల నిరోధకతను పెంచడానికి సిఫార్సు చేసిన మోతాదులో పొటాషియంను వర్తింపజేయండి.",
+        },
     },
 }
 
@@ -479,7 +547,11 @@ class GeminiVLMRunner(BaseModelRunner):
         return label
 
     def _infer_sync(
-        self, image: Image.Image, prompt: str | None, crop: str | None = None
+        self,
+        image: Image.Image,
+        prompt: str | None,
+        crop: str | None = None,
+        language: str = "en",
     ) -> Dict[str, List[Detection]]:
         """Synchronous inference implementation for Gemini VLM."""
         from google.genai.types import (  # pylint: disable=import-error
@@ -599,10 +671,14 @@ class GeminiVLMRunner(BaseModelRunner):
         return {"detections": detections}
 
     async def infer(
-        self, image: Image.Image, prompt: str | None, crop: str | None = None
+        self,
+        image: Image.Image,
+        prompt: str | None,
+        crop: str | None = None,
+        language: str = "en",
     ) -> Dict[str, List[Detection]]:
         """Async inference wrapper."""
-        return await asyncio.to_thread(self._infer_sync, image, prompt, crop)
+        return await asyncio.to_thread(self._infer_sync, image, prompt, crop, language)
 
 
 class Qwen3VLMRunner(BaseModelRunner):
@@ -1872,9 +1948,12 @@ async def run_inference(payload: InferenceRequest):
                         "Failed to convert qwen25_vllm bbox coordinates: %s", e
                     )
         else:
-            # Pass crop parameter to all models (including vlm_ss)
+            # Pass crop and language parameters to all models (including vlm_ss)
             outputs = await runner.infer(
-                image=image, prompt=payload.prompt, crop=payload.crop
+                image=image,
+                prompt=payload.prompt,
+                crop=payload.crop,
+                language=payload.language,
             )
     except Exception as exc:  # pragma: no cover - runtime safeguard
         logger.exception("Inference failed: %s", exc)
@@ -1888,26 +1967,30 @@ async def run_inference(payload: InferenceRequest):
 
     # For both YOLO-based and Gemini-based pest detection models
     if detections and (isinstance(runner, (GeminiVLMRunner, YoloRunner))):
+        # Validate and use requested language
+        language = payload.language if payload.language in PEST_INFO else "en"
+
         # Extract unique pest types from detections
         unique_pests = set()
         for detection in detections:
             # Get base pest name (strip position descriptors)
             label = detection.label.lower()
             # Check if this label matches any known pest
-            for pest_name in PEST_INFO.keys():
+            for pest_name in PEST_INFO[language].keys():
                 if label.startswith(pest_name) or pest_name in label:
                     unique_pests.add(pest_name)
                     break
 
-        # Build answer with descriptions and remedies for detected pests
+        # Build answer with descriptions and remedies for detected pests in requested language
         if unique_pests:
             answers = []
             for pest_name in sorted(unique_pests):
-                if pest_name in PEST_INFO:
-                    info = PEST_INFO[pest_name]
-                    answer_text = f"**{pest_name.replace('_', ' ').title()}**\n\n"
-                    answer_text += f"Description: {info['description']}\n\n"
-                    answer_text += f"Remedies: {info['remedies']}"
+                if pest_name in PEST_INFO[language]:
+                    info = PEST_INFO[language][pest_name]
+                    # Use localized name
+                    answer_text = f"**{info['name']}**\n\n"
+                    answer_text += f"{info['description']}\n\n"
+                    answer_text += f"**{'Remedies' if language == 'en' else 'నివారణలు'}:**\n{info['remedies']}"
 
                     answers.append(
                         VisionLanguageAnswer(answer=answer_text, confidence=1.0)

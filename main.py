@@ -117,6 +117,7 @@ class InferenceHistoryItem(BaseModel):
     user_id: str | None
     model_id: str
     crop: str | None
+    language: str
     image_source: str
     image_url: str | None
     prompt: str | None
@@ -1357,6 +1358,7 @@ async def init_database():
                 user_id TEXT,
                 model_id TEXT NOT NULL,
                 crop TEXT,
+                language TEXT DEFAULT 'en',
                 image_source TEXT NOT NULL,
                 image_url TEXT,
                 prompt TEXT,
@@ -1387,6 +1389,16 @@ async def init_database():
             await conn.execute("ALTER TABLE inference_logs ADD COLUMN crop TEXT")
             await conn.commit()
 
+        # Migration: Add language column if it doesn't exist (for existing databases)
+        try:
+            await conn.execute("SELECT language FROM inference_logs LIMIT 1")
+        except aiosqlite.OperationalError:
+            logger.info("Adding language column to existing database...")
+            await conn.execute(
+                "ALTER TABLE inference_logs ADD COLUMN language TEXT DEFAULT 'en'"
+            )
+            await conn.commit()
+
         await conn.commit()
     logger.info("Database initialized at: %s", db_path)
 
@@ -1395,6 +1407,7 @@ async def log_inference_to_db(
     user_id: str | None,
     model_id: str,
     crop: str | None,
+    language: str,
     image_source: str,
     image_url: str | None,
     prompt: str | None,
@@ -1416,14 +1429,15 @@ async def log_inference_to_db(
             await conn.execute(
                 """
                 INSERT INTO inference_logs
-                (user_id, model_id, crop, image_source, image_url, prompt, duration_ms,
+                (user_id, model_id, crop, language, image_source, image_url, prompt, duration_ms,
                  detections_count, detections_json, answers_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     user_id,
                     model_id,
                     crop,
+                    language,
                     image_source,
                     image_url,
                     prompt,
@@ -1436,10 +1450,11 @@ async def log_inference_to_db(
 
             await conn.commit()
         logger.info(
-            "Logged inference to database: user=%s, model=%s, crop=%s, detections=%d",
+            "Logged inference to database: user=%s, model=%s, crop=%s, language=%s, detections=%d",
             user_id,
             model_id,
             crop,
+            language,
             detections_count,
         )
     except Exception as exc:
@@ -1470,7 +1485,7 @@ async def get_user_history(
             offset = (page - 1) * page_size
             async with conn.execute(
                 """
-                SELECT id, user_id, model_id, crop, image_source, image_url, prompt,
+                SELECT id, user_id, model_id, crop, language, image_source, image_url, prompt,
                        duration_ms, detections_count, detections_json, answers_json,
                        created_at
                 FROM inference_logs
@@ -1494,12 +1509,19 @@ async def get_user_history(
                 answers_data = json.loads(row["answers_json"])
                 answers = [VisionLanguageAnswer(**a) for a in answers_data]
 
+            # Get language with fallback for old records
+            try:
+                language = row["language"]
+            except (KeyError, IndexError):
+                language = "en"  # Default to English for old records without language
+
             items.append(
                 InferenceHistoryItem(
                     id=row["id"],
                     user_id=row["user_id"],
                     model_id=row["model_id"],
                     crop=row["crop"],
+                    language=language,
                     image_source=row["image_source"],
                     image_url=row["image_url"],
                     prompt=row["prompt"],
@@ -2011,6 +2033,7 @@ async def run_inference(payload: InferenceRequest):
         user_id=payload.user_id,
         model_id=payload.model_id,
         crop=payload.crop,
+        language=payload.language,
         image_source=image_source,
         image_url=image_url_str,
         prompt=payload.prompt,

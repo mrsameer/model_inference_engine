@@ -29,6 +29,10 @@ env/
 # Environment variables
 .env
 
+# Credentials
+*-api-key.json
+vertex-gemini-api-key.json
+
 # Database and Storage
 storage/
 *.db

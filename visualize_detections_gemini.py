@@ -26,7 +26,9 @@ from pydantic import BaseModel
 load_dotenv()
 
 # Configuration
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+VERTEX_AI_CREDENTIALS_PATH = os.getenv("VERTEX_AI_CREDENTIALS_PATH", "vertex-gemini-api-key.json")
+VERTEX_AI_PROJECT_ID = os.getenv("VERTEX_AI_PROJECT_ID")
+VERTEX_AI_LOCATION = os.getenv("VERTEX_AI_LOCATION", "us-central1")
 # IMAGE_URL = "https://aspire.ap.gov.in/api/minio/download/stream?objectName=documents/852db639-eb52-4126-b009-c292d0fa8fc7/1000118035.jpg"
 IMAGE_URL = "https://aspire.ap.gov.in/api/minio/download/stream?objectName=documents/4c15515a-97df-4eda-8616-3670a704d09e/1000118034.jpg"
 MODEL_NAME = "gemini-2.5-flash"  # or "gemini-2.5-pro"
@@ -145,16 +147,15 @@ def convert_gemini_to_yolo_format(gemini_boxes: list[GeminiBoundingBox], image_w
     return detections
 
 
-def upload_image_to_gemini(client: genai.Client, image_url: str) -> tuple[str, Image.Image]:
+def prepare_image_for_gemini(image_url: str) -> tuple[bytes, Image.Image]:
     """
-    Download image and upload to Gemini Files API.
+    Download image and prepare for Vertex AI Gemini.
 
     Args:
-        client: Gemini client
-        image_url: URL of the image to upload
+        image_url: URL of the image to download
 
     Returns:
-        Tuple of (file_uri, PIL Image)
+        Tuple of (image_bytes, PIL Image)
     """
     # Download the image
     image = download_image(image_url)
@@ -163,15 +164,9 @@ def upload_image_to_gemini(client: genai.Client, image_url: str) -> tuple[str, I
     img_byte_arr = BytesIO()
     image.save(img_byte_arr, format='JPEG')
     img_byte_arr.seek(0)
+    image_bytes = img_byte_arr.read()
 
-    # Upload to Gemini Files API
-    uploaded_file = client.files.upload(
-        file=img_byte_arr,
-        config=UploadFileConfig(mime_type='image/jpeg')
-    )
-    file_uri = uploaded_file.uri
-
-    return file_uri, image
+    return image_bytes, image
 
 
 def build_system_instruction(crop_type: str) -> str:
@@ -232,32 +227,43 @@ def build_detection_prompt(crop_type: str) -> str:
     return f"Detect all instances of {pests_list} in this agricultural image. Provide bounding boxes with labels and confidence scores."
 
 
-def detect_with_gemini(image_url: str, api_key: str, crop_type: str = "maize"):
+def detect_with_gemini(image_url: str, crop_type: str = "maize"):
     """
-    Use Gemini API with native bounding box detection.
+    Use Gemini API with native bounding box detection via Vertex AI.
 
     Args:
         image_url: URL of the image to analyze
-        api_key: Gemini API key
         crop_type: Type of crop to detect pests for (maize, paddy, cotton, all)
 
     Returns:
         List of detections in YOLO format
     """
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY not found in .env file")
+    if not VERTEX_AI_PROJECT_ID:
+        raise ValueError("VERTEX_AI_PROJECT_ID not found in .env file")
 
     if crop_type not in PEST_CONFIGS:
         raise ValueError(f"Invalid crop type: {crop_type}. Options: {list(PEST_CONFIGS.keys())}")
 
-    # Initialize Gemini client
-    client = genai.Client(api_key=api_key)
+    # Load credentials from JSON file with required scopes
+    from google.oauth2 import service_account
+    credentials = service_account.Credentials.from_service_account_file(
+        VERTEX_AI_CREDENTIALS_PATH,
+        scopes=['https://www.googleapis.com/auth/cloud-platform']
+    )
 
-    # Upload image to Gemini Files API
-    print("Uploading image to Gemini Files API...")
-    file_uri, image = upload_image_to_gemini(client, image_url)
+    # Initialize Vertex AI Gemini client
+    client = genai.Client(
+        vertexai=True,
+        project=VERTEX_AI_PROJECT_ID,
+        location=VERTEX_AI_LOCATION,
+        credentials=credentials,
+    )
+
+    # Prepare image for Vertex AI
+    print("Preparing image for Vertex AI...")
+    image_bytes, image = prepare_image_for_gemini(image_url)
     width, height = image.size
-    print(f"Image uploaded. Size: {width}x{height}")
+    print(f"Image prepared. Size: {width}x{height}")
 
     # Build system instruction and prompt for the crop type
     system_instruction = build_system_instruction(crop_type)
@@ -277,11 +283,11 @@ def detect_with_gemini(image_url: str, api_key: str, crop_type: str = "maize"):
         response_schema=list[GeminiBoundingBox],
     )
 
-    # Generate content with structured output
+    # Generate content with structured output using inline image data
     response = client.models.generate_content(
         model=MODEL_NAME,
         contents=[
-            Part.from_uri(file_uri=file_uri, mime_type="image/jpeg"),
+            Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
             detection_prompt,
         ],
         config=config,
@@ -403,10 +409,10 @@ def main(crop_type: str = None, image_url: str = None):
     print()
 
     # Run Gemini detection
-    print("Running Gemini detection with native bounding box API...")
+    print("Running Gemini detection with native bounding box API via Vertex AI...")
     start_time = time.time()
 
-    detections, image = detect_with_gemini(image_url, GEMINI_API_KEY, crop_type)
+    detections, image = detect_with_gemini(image_url, crop_type)
 
     duration_ms = (time.time() - start_time) * 1000
 

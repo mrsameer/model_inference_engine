@@ -369,26 +369,45 @@ class GeminiVLMRunner(BaseModelRunner):
         self.crop_type = crop_type
         self._client = None
         self._lock = threading.Lock()
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        if not self.api_key:
+        self.credentials_path = os.getenv(
+            "VERTEX_AI_CREDENTIALS_PATH", "vertex-gemini-api-key.json"
+        )
+        self.project_id = os.getenv("VERTEX_AI_PROJECT_ID")
+        self.location = os.getenv("VERTEX_AI_LOCATION", "us-central1")
+        if not self.project_id:
             logger.warning(
-                "GEMINI_API_KEY not found in environment. Gemini VLM will not work."
+                "VERTEX_AI_PROJECT_ID not found in environment. Gemini VLM will not work."
             )
 
     def _ensure_client(self):
-        """Initialize Gemini client lazily."""
+        """Initialize Gemini client lazily with Vertex AI authentication."""
         if self._client is None:
             with self._lock:
                 if self._client is None:
                     from google import genai  # pylint: disable=import-error
+                    from google.oauth2 import service_account  # pylint: disable=import-error
 
-                    if not self.api_key:
-                        raise ValueError("GEMINI_API_KEY not found in .env file")
+                    if not self.project_id:
+                        raise ValueError("VERTEX_AI_PROJECT_ID not found in .env file")
+
+                    # Load credentials from JSON file with required scopes
+                    credentials = service_account.Credentials.from_service_account_file(
+                        self.credentials_path,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
 
                     logger.info(
-                        "Initializing Gemini client with model: %s", self.model_name
+                        "Initializing Vertex AI Gemini client with model: %s, project: %s, location: %s",
+                        self.model_name,
+                        self.project_id,
+                        self.location,
                     )
-                    self._client = genai.Client(api_key=self.api_key)
+                    self._client = genai.Client(
+                        vertexai=True,
+                        project=self.project_id,
+                        location=self.location,
+                        credentials=credentials,
+                    )
         return self._client
 
     def _build_system_instruction(
@@ -439,20 +458,13 @@ class GeminiVLMRunner(BaseModelRunner):
         pests_list = ", ".join(config["pests"])
         return f"Detect all instances of {pests_list} in this agricultural image. Provide bounding boxes with labels and confidence scores."
 
-    def _upload_image_to_gemini(self, client, image: Image.Image) -> str:
-        """Upload image to Gemini Files API."""
-        from google.genai.types import UploadFileConfig  # pylint: disable=import-error
-
+    def _prepare_image_bytes(self, image: Image.Image) -> bytes:
+        """Convert PIL Image to bytes for Vertex AI."""
         # Convert image to bytes
         img_byte_arr = io.BytesIO()
         image.save(img_byte_arr, format="JPEG")
         img_byte_arr.seek(0)
-
-        # Upload to Gemini Files API
-        uploaded_file = client.files.upload(
-            file=img_byte_arr, config=UploadFileConfig(mime_type="image/jpeg")
-        )
-        return uploaded_file.uri
+        return img_byte_arr.read()
 
     def _get_pest_base_name(self, label: str) -> str:
         """Extract the base pest name from a label with position descriptor."""
@@ -513,11 +525,11 @@ class GeminiVLMRunner(BaseModelRunner):
 
         client = self._ensure_client()
 
-        # Upload image to Gemini Files API
-        logger.info("Uploading image to Gemini Files API...")
-        file_uri = self._upload_image_to_gemini(client, image)
+        # Prepare image bytes for Vertex AI
+        logger.info("Preparing image for Vertex AI...")
+        image_bytes = self._prepare_image_bytes(image)
         width, height = image.size
-        logger.info("Image uploaded. Size: %dx%d", width, height)
+        logger.info("Image prepared. Size: %dx%d", width, height)
 
         # Build system instruction and prompt for the crop type
         system_instruction = self._build_system_instruction(crop_type, user_crop_name)
@@ -541,14 +553,14 @@ class GeminiVLMRunner(BaseModelRunner):
             response_schema=list[GeminiBoundingBox],
         )
 
-        # Generate content with structured output
+        # Generate content with structured output using inline image data
         logger.info(
             "Running Gemini %s detection for crop: %s", self.model_name, crop_type
         )
         response = client.models.generate_content(
             model=self.model_name,
             contents=[
-                Part.from_uri(file_uri=file_uri, mime_type="image/jpeg"),
+                Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
                 detection_prompt,
             ],
             config=config,

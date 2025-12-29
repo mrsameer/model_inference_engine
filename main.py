@@ -2047,25 +2047,39 @@ async def run_inference(payload: InferenceRequest):
             prompt = json.dumps(context)
             outputs = await runner.infer(image=image, prompt=prompt)
         elif payload.model_id == "qwen25_vllm":
+            # Build image_url: use provided URL or convert base64 to data URL
+            if payload.image_url:
+                image_url_for_vllm = str(payload.image_url)
+            elif payload.image_base64:
+                image_url_for_vllm = f"data:image/jpeg;base64,{payload.image_base64}"
+            else:
+                image_url_for_vllm = None
+
             outputs = await runner.infer(
                 image=image,
                 prompt=payload.prompt,
                 crop=payload.crop,
-                image_url=str(payload.image_url) if payload.image_url else None,
+                image_url=image_url_for_vllm,
             )
             # Convert 1000-normalized bounding boxes to pixel coordinates
-            if outputs.get("detections") and payload.image_url:
+            if outputs.get("detections") and (
+                payload.image_url or payload.image_base64
+            ):
                 try:
-                    # Fetch image to get dimensions
-                    async with httpx.AsyncClient(timeout=30) as client:
-                        img_response = await client.get(str(payload.image_url))
-                        img_response.raise_for_status()
-                        img = Image.open(io.BytesIO(img_response.content))
-                        # Fix EXIF rotation
-                        from PIL import ImageOps
+                    # Get image dimensions from URL or base64
+                    from PIL import ImageOps
 
-                        img = ImageOps.exif_transpose(img)
-                        width, height = img.size
+                    if payload.image_url:
+                        async with httpx.AsyncClient(timeout=30) as client:
+                            img_response = await client.get(str(payload.image_url))
+                            img_response.raise_for_status()
+                            img = Image.open(io.BytesIO(img_response.content))
+                    else:
+                        img_bytes = base64.b64decode(payload.image_base64)
+                        img = Image.open(io.BytesIO(img_bytes))
+
+                    img = ImageOps.exif_transpose(img)
+                    width, height = img.size
 
                     # Convert coordinates from 1000-normalized to pixels
                     for detection in outputs["detections"]:

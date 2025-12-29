@@ -7,8 +7,10 @@ import json
 import logging
 import os
 import re
+import tempfile
 import threading
 import time
+import uuid
 from contextlib import asynccontextmanager
 from enum import Enum
 from pathlib import Path
@@ -17,7 +19,8 @@ from typing import Any, Callable, Dict, List
 import aiosqlite
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
@@ -1920,6 +1923,42 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Create temp directory for serving images to vLLM
+TEMP_IMAGE_DIR = Path(tempfile.gettempdir()) / "inference_images"
+TEMP_IMAGE_DIR.mkdir(exist_ok=True)
+
+# Mount static files to serve temp images
+app.mount(
+    "/temp_images", StaticFiles(directory=str(TEMP_IMAGE_DIR)), name="temp_images"
+)
+
+
+def _save_base64_to_temp(image_base64: str) -> tuple[str, Path]:
+    """Save base64 image to temp file and return (filename, path)."""
+    img_bytes = base64.b64decode(image_base64)
+    img = Image.open(io.BytesIO(img_bytes))
+    img_format = (img.format or "JPEG").lower()
+    ext = "jpg" if img_format == "jpeg" else img_format
+
+    filename = f"{uuid.uuid4()}.{ext}"
+    filepath = TEMP_IMAGE_DIR / filename
+
+    # Save as RGB to ensure compatibility
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    img.save(filepath, format=img_format.upper() if img_format != "jpg" else "JPEG")
+
+    return filename, filepath
+
+
+def _cleanup_temp_image(filepath: Path) -> None:
+    """Remove temp image file."""
+    try:
+        if filepath.exists():
+            filepath.unlink()
+    except Exception as e:
+        logger.warning("Failed to cleanup temp image %s: %s", filepath, e)
+
 
 async def _load_image(payload: InferenceRequest) -> Image.Image:
     if payload.image_base64:
@@ -2019,7 +2058,7 @@ async def get_history(
 
 
 @app.post("/inference", response_model=InferenceResponse)
-async def run_inference(payload: InferenceRequest):
+async def run_inference(payload: InferenceRequest, request: Request):
     try:
         runner = registry.get_runner(payload.model_id)
         card = registry.get_card(payload.model_id)
@@ -2034,6 +2073,7 @@ async def run_inference(payload: InferenceRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    temp_image_path: Path | None = None
     start = time.perf_counter()
     try:
         # Special handling for clip_vlm model - pass context as JSON prompt
@@ -2047,16 +2087,16 @@ async def run_inference(payload: InferenceRequest):
             prompt = json.dumps(context)
             outputs = await runner.infer(image=image, prompt=prompt)
         elif payload.model_id == "qwen25_vllm":
-            # Build image_url: use provided URL or convert base64 to data URL
+            # Build image_url: use provided URL or save base64 to temp file
             if payload.image_url:
                 image_url_for_vllm = str(payload.image_url)
             elif payload.image_base64:
-                # Detect image format from base64 data
-                img_bytes = base64.b64decode(payload.image_base64)
-                img_for_mime = Image.open(io.BytesIO(img_bytes))
-                img_format = img_for_mime.format or "JPEG"
-                mime_type = f"image/{img_format.lower()}"
-                image_url_for_vllm = f"data:{mime_type};base64,{payload.image_base64}"
+                # Save base64 to temp file and serve via static URL
+                filename, temp_image_path = _save_base64_to_temp(payload.image_base64)
+                # Build URL using request's base URL
+                base_url = str(request.base_url).rstrip("/")
+                image_url_for_vllm = f"{base_url}/temp_images/{filename}"
+                logger.info("Saved temp image: %s -> %s", filename, image_url_for_vllm)
             else:
                 image_url_for_vllm = None
 
@@ -2169,6 +2209,10 @@ async def run_inference(payload: InferenceRequest):
         detections=detections,
         answers=answers,
     )
+
+    # Cleanup temp image if created
+    if temp_image_path:
+        _cleanup_temp_image(temp_image_path)
 
     return InferenceResponse(
         model=card,

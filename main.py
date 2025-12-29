@@ -935,7 +935,7 @@ Return ONLY valid JSON with this exact structure:
 class Qwen25VLLMRunner(Qwen3VLMRunner):
     """Runs Qwen2.5-VL via vLLM API using direct image URLs."""
 
-    API_URL = "http://acerkrishidss.vassarlabs.com/vllm/v1/chat/completions"
+    API_URL = "http://localhost:8000/v1/chat/completions"
     MODEL_NAME = "Qwen/Qwen2.5-VL-7B-Instruct"
     TIMEOUT = 300
 
@@ -1696,14 +1696,14 @@ def register_default_models():
         ],
         capabilities=["object-detection", "bounding-box", "pest-detection"],
     )
-    registry.register(
-        pest_faw,
-        lambda card=pest_faw: YoloRunner(
-            card=card,
-            weights="models/pest_fall_army_warm_ss.pt",
-            conf_threshold=0.25,
-        ),
-    )
+    # registry.register(
+    #     pest_faw,
+    #     lambda card=pest_faw: YoloRunner(
+    #         card=card,
+    #         weights="models/pest_fall_army_warm_ss.pt",
+    #         conf_threshold=0.25,
+    #     ),
+    # )
 
     # Gemini VLM Multi-Pest Detection Model
     vlm_ss = ModelCard(
@@ -1736,14 +1736,14 @@ def register_default_models():
             "flexible-prompting",
         ],
     )
-    registry.register(
-        vlm_ss,
-        lambda card=vlm_ss: GeminiVLMRunner(
-            card=card,
-            model_name="gemini-2.5-pro",
-            crop_type="all",
-        ),
-    )
+    # registry.register(
+    #     vlm_ss,
+    #     lambda card=vlm_ss: GeminiVLMRunner(
+    #         card=card,
+    #         model_name="gemini-2.5-pro",
+    #         crop_type="all",
+    #     ),
+    # )
 
     # Qwen3 VLM via Ollama
     qwen3 = ModelCard(
@@ -1849,10 +1849,10 @@ def register_default_models():
             "multi-crop",
         ],
     )
-    registry.register(
-        clip_vlm,
-        lambda card=clip_vlm: ClipVLMRunner(card=card),
-    )
+    # registry.register(
+    #     clip_vlm,
+    #     lambda card=clip_vlm: ClipVLMRunner(card=card),
+    # )
 
 
 register_default_models()

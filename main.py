@@ -2051,7 +2051,12 @@ async def run_inference(payload: InferenceRequest):
             if payload.image_url:
                 image_url_for_vllm = str(payload.image_url)
             elif payload.image_base64:
-                image_url_for_vllm = f"data:image/jpeg;base64,{payload.image_base64}"
+                # Detect image format from base64 data
+                img_bytes = base64.b64decode(payload.image_base64)
+                img_for_mime = Image.open(io.BytesIO(img_bytes))
+                img_format = img_for_mime.format or "JPEG"
+                mime_type = f"image/{img_format.lower()}"
+                image_url_for_vllm = f"data:{mime_type};base64,{payload.image_base64}"
             else:
                 image_url_for_vllm = None
 

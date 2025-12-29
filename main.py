@@ -135,6 +135,36 @@ class InferenceHistoryResponse(BaseModel):
     items: List[InferenceHistoryItem]
 
 
+class DirectoryInferenceRequest(BaseModel):
+    model_id: str = Field(..., description="Identifier returned from /models")
+    directory_path: str = Field(..., description="Path to directory containing images")
+    user_id: str | None = Field(default=None, description="Optional user identifier")
+    crop: str | None = Field(default=None, description="Optional crop type")
+    task: str | None = Field(default=None, description="Optional task type")
+    language: str = Field(default="en", description="Language for responses")
+    prompt: str | None = Field(default=None, description="Optional prompt for VLM")
+
+
+class DirectoryInferenceResultItem(BaseModel):
+    file_name: str
+    file_path: str
+    success: bool
+    error: str | None = None
+    duration_ms: float | None = None
+    detections: List[Detection] | None = None
+    answers: List[VisionLanguageAnswer] | None = None
+
+
+class DirectoryInferenceResponse(BaseModel):
+    model: ModelCard
+    directory_path: str
+    total_images: int
+    successful: int
+    failed: int
+    total_duration_ms: float
+    results: List[DirectoryInferenceResultItem]
+
+
 class BaseModelRunner:
     """Abstract runtime for a model."""
 
@@ -1526,10 +1556,14 @@ async def get_user_history(
             try:
                 original_language = row["language"]
             except (KeyError, IndexError):
-                original_language = "en"  # Default to English for old records without language
+                original_language = (
+                    "en"  # Default to English for old records without language
+                )
 
             # Determine which language to use for answers
-            target_language = response_language if response_language else original_language
+            target_language = (
+                response_language if response_language else original_language
+            )
 
             # Validate target language
             if target_language not in PEST_INFO:
@@ -1538,10 +1572,16 @@ async def get_user_history(
                     target_language,
                     original_language,
                 )
-                target_language = original_language if original_language in PEST_INFO else "en"
+                target_language = (
+                    original_language if original_language in PEST_INFO else "en"
+                )
 
             # Regenerate answers in target language if detections exist and language differs
-            if detections and response_language and response_language != original_language:
+            if (
+                detections
+                and response_language
+                and response_language != original_language
+            ):
                 # Extract unique pest types from detections
                 unique_pests = set()
                 for detection in detections:
@@ -1559,7 +1599,9 @@ async def get_user_history(
                             info = PEST_INFO[target_language][pest_name]
                             answer_text = f"**{info['name']}**\n\n"
                             answer_text += f"{info['description']}\n\n"
-                            remedies_label = "Remedies" if target_language == "en" else "నివారణలు"
+                            remedies_label = (
+                                "Remedies" if target_language == "en" else "నివారణలు"
+                            )
                             answer_text += f"**{remedies_label}:**\n{info['remedies']}"
                             answers.append(
                                 VisionLanguageAnswer(answer=answer_text, confidence=1.0)
@@ -2114,6 +2156,132 @@ async def run_inference(payload: InferenceRequest):
         duration_ms=round(duration_ms, 2),
         detections=detections,
         answers=answers,
+    )
+
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"}
+
+
+@app.post("/inference/directory", response_model=DirectoryInferenceResponse)
+async def run_directory_inference(payload: DirectoryInferenceRequest):
+    """Run inference on all images in a directory."""
+    try:
+        runner = registry.get_runner(payload.model_id)
+        card = registry.get_card(payload.model_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    dir_path = Path(payload.directory_path)
+    if not dir_path.exists():
+        raise HTTPException(
+            status_code=400, detail=f"Directory not found: {payload.directory_path}"
+        )
+    if not dir_path.is_dir():
+        raise HTTPException(
+            status_code=400, detail=f"Path is not a directory: {payload.directory_path}"
+        )
+
+    # Find all image files
+    image_files = [
+        f
+        for f in dir_path.iterdir()
+        if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS
+    ]
+
+    if not image_files:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No image files found in directory: {payload.directory_path}",
+        )
+
+    results: List[DirectoryInferenceResultItem] = []
+    successful = 0
+    failed = 0
+    total_start = time.perf_counter()
+
+    for image_file in sorted(image_files):
+        start = time.perf_counter()
+        try:
+            # Load image from file
+            image = Image.open(image_file)
+            from PIL import ImageOps
+
+            image = ImageOps.exif_transpose(image)
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+
+            # For qwen25_vllm, we need to convert to base64 since no URL
+            if payload.model_id == "qwen25_vllm":
+                # Encode image as base64 data URL
+                buffered = io.BytesIO()
+                image.save(buffered, format="JPEG")
+                img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                image_url = f"data:image/jpeg;base64,{img_base64}"
+
+                outputs = await runner.infer(
+                    image=None,
+                    prompt=payload.prompt,
+                    crop=payload.crop,
+                    image_url=image_url,
+                )
+
+                # Convert 1000-normalized bounding boxes to pixel coordinates
+                if outputs.get("detections"):
+                    width, height = image.size
+                    for detection in outputs["detections"]:
+                        box = detection.box
+                        detection.box = BoundingBox(
+                            x_min=float(box.x_min * width / 1000),
+                            y_min=float(box.y_min * height / 1000),
+                            x_max=float(box.x_max * width / 1000),
+                            y_max=float(box.y_max * height / 1000),
+                        )
+            else:
+                outputs = await runner.infer(
+                    image=image,
+                    prompt=payload.prompt,
+                    crop=payload.crop,
+                    language=payload.language,
+                )
+
+            duration_ms = (time.perf_counter() - start) * 1000
+            results.append(
+                DirectoryInferenceResultItem(
+                    file_name=image_file.name,
+                    file_path=str(image_file),
+                    success=True,
+                    duration_ms=round(duration_ms, 2),
+                    detections=outputs.get("detections"),
+                    answers=outputs.get("answers"),
+                )
+            )
+            successful += 1
+            logger.info("Processed %s in %.2fms", image_file.name, duration_ms)
+
+        except Exception as exc:
+            duration_ms = (time.perf_counter() - start) * 1000
+            logger.error("Failed to process %s: %s", image_file.name, exc)
+            results.append(
+                DirectoryInferenceResultItem(
+                    file_name=image_file.name,
+                    file_path=str(image_file),
+                    success=False,
+                    error=str(exc),
+                    duration_ms=round(duration_ms, 2),
+                )
+            )
+            failed += 1
+
+    total_duration_ms = (time.perf_counter() - total_start) * 1000
+
+    return DirectoryInferenceResponse(
+        model=card,
+        directory_path=payload.directory_path,
+        total_images=len(image_files),
+        successful=successful,
+        failed=failed,
+        total_duration_ms=round(total_duration_ms, 2),
+        results=results,
     )
 
 
